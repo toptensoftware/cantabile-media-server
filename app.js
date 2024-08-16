@@ -14,6 +14,12 @@ import { mimeTypeFromFile } from './mimeTypes.js';
     
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
+
+let pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json')), "utf8");
+
+console.log(`cantabile-media-server ${pkg.version}`);
+console.log("Copyright (C) 2024 Topten Software. All Rights Reserved");
+
 // App State
 let app = express(); 
 let sockets = [];
@@ -257,12 +263,14 @@ server.on('upgrade', function (request, socket, head) {
 // Handle new socket connection
 wss.on('connection', function (ws, request) {
 
+//    console.log(`new socket connection (count=${sockets.length})`);
     sockets.push(ws);
 
     ws.on('error', console.error);
   
     ws.on('close', function () {
         sockets.splice(sockets.indexOf(ws), 1);
+//        console.log(`socket connection closed (count=${sockets.length})`);
     });
 });
   
@@ -290,6 +298,7 @@ function gracefulClose(signal) {
     midiInput.closePort();
     for (let i=0; i<sockets.length; i++)
         sockets[i].close();
+    server.closeAllConnections();
     server.close( () => { console.log('HTTP(S) server closed') } );
 }
 process.on('SIGINT', gracefulClose);
