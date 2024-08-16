@@ -10,6 +10,7 @@ let mimeTypes = {
     ".webp": "image/webp",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
+    ".ogv": "video/ogg",
 };
 
 // Helper to get mimetype of a file from its extension
