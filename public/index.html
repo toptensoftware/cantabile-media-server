@@ -1,0 +1,195 @@
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+:root
+{
+    color-scheme: dark;
+    font-family: sans-serif;
+}
+body
+{
+    margin: 0;
+}
+
+#videoContainer
+{
+    width: 640px; 
+    height: 480px;
+}
+
+#video
+{
+    width: 100%; 
+    height: 100%;
+    background-color: black;
+    display: none;
+}
+
+#image
+{
+    width: 100%; 
+    height: 100%;
+    background-color: black;
+    display: none;
+    object-fit: contain;
+}
+
+</style>
+</head>
+<body>
+    <div id="videoContainer">
+        <video id="video" src=""></video>
+        <img id="image" src=""/>
+    </div>
+    <div id="controls">
+        Channel:
+        <select id="channel">
+            <option value="0">1</option>
+            <option value="1">2</option>
+            <option value="2">3</option>
+            <option value="3">4</option>
+            <option value="4">5</option>
+            <option value="5">6</option>
+            <option value="6">7</option>
+            <option value="7">8</option>
+            <option value="8">9</option>
+            <option value="9">10</option>
+            <option value="10">11</option>
+            <option value="11">12</option>
+            <option value="12">13</option>
+            <option value="13">14</option>
+            <option value="14">15</option>
+            <option value="15">16</option>
+        </select>
+        <button id="btnFullScreen">Full-Screen</button>
+    </div>
+</div>
+
+
+<script>
+
+// In edge/chrome -> settings -> media autoplay -> allow -> add site, or turn off limiting globally.
+
+// State
+let activeChannel = -1;
+let channelState = null;
+
+// Get element
+let video = document.getElementById("video");
+let selChannel = document.getElementById("channel");
+
+// Turn off sound
+video.volume = 0;
+
+// Full-screen button handler
+document.getElementById("btnFullScreen").onclick = (event) => {
+    document.getElementById("videoContainer").requestFullscreen();
+}
+
+// URL Hash <-> Channel selector
+if (document.location.hash.length > 1)
+{
+    hashChanged();
+}
+else
+{
+    loadChannel();
+}
+window.addEventListener("hashchange", hashChanged);
+selChannel.onchange = () => {
+    document.location.hash = `#ch=${parseInt(selChannel.value) + 1}`;
+    loadChannel();
+}
+function hashChanged()
+{
+    var state = new URLSearchParams('?' + document.location.hash.substring(1));
+    if (state.get("ch"))
+    {
+        selChannel.value = parseInt(state.get("ch") - 1);
+    }
+    loadChannel();
+    
+}
+
+
+// Channel Load
+
+async function loadChannel()
+{
+    // Get currently selected channel
+    let channel = parseInt(selChannel.value);
+    if (channel == activeChannel || channel < 0 || channel > 15)
+        return;
+
+    // Store active channel (to prevent duplicate requests)
+    activeChannel = channel;
+
+    // Clear channel state until retrieved
+    channelState = null;
+
+    // Get the current channel state from server
+    let response = await fetch(`/channelState/${channel}`);
+    channelState = await response.json();
+
+    onChannelStateChanged();
+}
+
+function onChannelStateChanged()
+{
+    // Update the displayed media
+    if (channelState.mimeType.startsWith("video/"))
+    {
+        video.setAttribute('src', channelState.mediaFile ?? "");
+        video.style['display'] = 'inline';
+        image.style.removeProperty("display");
+    }
+    else if (channelState.mimeType.startsWith("image/"))
+    {
+        image.setAttribute('src', channelState.mediaFile ?? "");
+        image.style['display'] = 'inline';
+        video.style.removeProperty("display");
+    }
+    else
+    {
+        image.style['display'] = 'none';
+        video.style['display'] = 'none';
+    }
+}
+
+// WebSocket handler
+let ws = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "/ws");
+ws.onmessage = (event) => {
+    var msg = JSON.parse(event.data);
+    console.log(msg);
+
+    // Check message is for correct channel (or -1 for "all channels")
+    if (channelState == null || (msg.channel != activeChannel && msg.channel != -1))
+        return;
+
+    switch (msg.action)
+    {
+        case 'play':
+            video.play();
+            break;
+
+        case 'pause':
+            video.pause();
+            break;
+
+        case 'stop':
+            video.pause();
+            video.currentTime = 0;
+            break;
+
+        case 'load':
+            channelState = msg.channelState;
+            onChannelStateChanged();
+            break;
+    }
+};
+
+</script>
+
+</body>
+</html>
