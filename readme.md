@@ -11,14 +11,26 @@ command line and editing text files.
 
 ## Installation
 
+To install:
+
 1. Install [NodeJS](https://nodejs.org/en) (recommended v20.0).
-2. From a command prompt install the cantabile-media-server package:
+2. Install [Git](https://git-scm.com/downloads)
+3. From a command prompt install the cantabile-media-server package:
 
 ```
 npm install -g github:toptensoftware/cantabile-media-server
 ```
 
 (on non-Windows platforms may require `sudo`).
+
+To update existing install, re-run the above command.
+
+To uninstall:
+
+```
+npm uninstall -g cantabile-media-server
+```
+
 
 ## Configuration
 
@@ -107,6 +119,21 @@ in `programList.txt`.  Any currently connected displays will be updated to the n
 
 Send MMC Play, Pause and Stop events to control playback.  The device Id byte of the MMC message controls which
 MIDI channel to play/stop.   0 = all channels. 1 = MIDI Channel 1, 2 = MIDI Channel 2 etc...
+
+
+## Supported Media Files
+
+All media files must be natively supported by the browser. [See here](https://www.geeksforgeeks.org/html5-video/) for a
+list of video formats.
+
+The follow should work: .png, .jpg, .jpeg, .gif, .webp, .mp4, .webm and .ogv
+
+If your media is in a different format you'll need to manually convert.  For video files this can be easily 
+done with [ffmpeg](https://ffmpeg.org/):
+
+```
+ffmpeg -i input.mpg output.mp4
+```
 
 
 ## Running Across Multiple Machines
