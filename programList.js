@@ -55,7 +55,7 @@ export class ProgramList
         }
         catch (err)
         {
-            throw new Error(`${err.message} at line ${lineNo}`);
+            throw new Error(`${err.message} at line ${lineNo + 1}`);
         }
     }
 

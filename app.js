@@ -8,17 +8,38 @@ import express from 'express';
 import session from 'express-session';
 import midi from '@julusian/midi';
 import { WebSocketServer } from 'ws';
+import { parseCommandLine } from './commandLine.js';
 import { ProgramList } from './programList.js';
 import { MidiMessage, MidiController, MidiMmc } from './midiTypes.js';
 import { mimeTypeFromFile } from './mimeTypes.js';
-    
+
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
+let cl;
+try
+{
+    cl = parseCommandLine(process.argv);
+}
+catch (err)
+{
+    console.error(err.message);
+    process.exit(7);
+}
 
-let pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json')), "utf8");
+// List available midi devices?
+if (cl.listMidiDevices)
+{
+    // List available midi ports
+    let midiInput = new midi.Input();
+    let midiPortCount = midiInput.getPortCount();
+    for (let i=0; i<midiPortCount; i++)
+    {
+        console.log(`${i}: ${midiInput.getPortName(i)}`);
+    }
+    process.exit(0);
+}
 
-console.log(`cantabile-media-server ${pkg.version}`);
-console.log("Copyright (C) 2024 Topten Software. All Rights Reserved");
+
 
 // App State
 let app = express(); 
@@ -27,12 +48,36 @@ let programList = null;
 
 // Load config
 let config = JSON.parse(fs.readFileSync("config.json", "utf8"));
-console.log(config);
+if (cl.verbose)
+    console.log(config);
 
 // Load program list
 if (config.programList !== undefined)
 {
     programList = new ProgramList(config.programList);
+
+    if (cl.watch)
+    {
+        // Watch for changes
+        fs.watchFile(config.programList, function() {
+
+            try
+            {
+                var newProgramList = new ProgramList(config.programList);
+                programList = newProgramList;
+                for (let i=0; i<16; i++)
+                {
+                    OnProgramChange(i, channelStates[i].programNumber, true);
+                }
+                if (cl.verbose)
+                    console.log("Program list re-loaded");
+            }
+            catch (err)
+            {
+                console.error(`failed to reload program list - ${err.message}`);
+            }
+        });
+    }
 }
 
 // Setup initial state of each channel
@@ -40,6 +85,7 @@ let initialMediaFile = programList == null ? null : qualifyMediaFile(programList
 let initialMimeType = mimeTypeFromFile(initialMediaFile);
 let channelStates = [...Array(16)].map(function () { return  { 
     bank: 0,
+    programNumber: 0,
     mediaFile: initialMediaFile,
     mimeType: initialMimeType,
 }});
@@ -101,12 +147,6 @@ app.get('/channelState/:channel', (req, res) => {
 
 // List available midi ports
 let midiInput = new midi.Input();
-let midiPortCount = midiInput.getPortCount();
-console.log("Available MIDI ports:");
-for (let i=0; i<midiPortCount; i++)
-{
-    console.log(`  ${i}: ${midiInput.getPortName(i)}`);
-}
 
 // Don't ignore sys-ex
 midiInput.ignoreTypes(false, true, true);
@@ -171,33 +211,44 @@ midiInput.on('message', (deltaTime, m) => {
     }
     catch (err)
     {
-        console.log(err);
+        console.err(err.message);
     }
 
 });
 
-function OnProgramChange(channel, programNumber)
+function OnProgramChange(channel, programNumber, ignoreRedundant)
 {
-    let channelState = channelStates[channel];
-
-    programNumber = (channelState.bank << 7) | programNumber;
-
-    console.log(`program change: ${programNumber} on ch ${channel}`);
-
     // Must have a program list
     if (!programList)
+    {
+        console.log(`program change ignored (no program list loaded)`);
         return;
+    }
+
+
+    let channelState = channelStates[channel];
+    channelState.programNumber = programNumber;
+    programNumber = (channelState.bank << 7) | programNumber;
 
     // Get the media file, quit if none
     let mediaFile = programList.getMediaFile(programNumber);
     if (!mediaFile)
+    {
+        console.log(`no media file selected for program number ${programNumber}`);
+        return;
+    }
+    mediaFile = qualifyMediaFile(mediaFile);
+
+    // Don't fire if redundant
+    if (ignoreRedundant && channelState.mediaFile == mediaFile)
         return;
 
     // Store media file in channel state
-    channelState.mediaFile = qualifyMediaFile(mediaFile);
+    channelState.mediaFile = mediaFile;
     channelState.mimeType = mimeTypeFromFile(mediaFile);
 
-    console.log(`loading program ${mediaFile} on ch ${channel}`);
+    if (cl.verbose)
+        console.log(`loading media file ${mediaFile} on ch ${channel}`);
 
     // Broadcast load
     broadcast({
@@ -212,6 +263,7 @@ if (typeof(config.midiPort) === 'string')
 {
     // Find MIDI port by name
     let opened = false;
+    let midiPortCount = midiInput.getPortCount();
     for (let i=0; i<midiPortCount; i++)
     {
         if (midiInput.getPortName(i) === config.midiPort)
@@ -263,21 +315,22 @@ server.on('upgrade', function (request, socket, head) {
 // Handle new socket connection
 wss.on('connection', function (ws, request) {
 
-//    console.log(`new socket connection (count=${sockets.length})`);
+    if (cl.verbose)
+        console.log(`new socket connection (count=${sockets.length})`);
     sockets.push(ws);
 
     ws.on('error', console.error);
   
     ws.on('close', function () {
         sockets.splice(sockets.indexOf(ws), 1);
-//        console.log(`socket connection closed (count=${sockets.length})`);
+        if (cl.verbose)
+            console.log(`socket connection closed (count=${sockets.length})`);
     });
 });
   
 // Start the server.
-let port = config.port || 3000;
-server.listen(port, function () {
-console.log(`Listening on port ${port}`);
+server.listen(config.port || 3000, config.host, function () {
+    console.log(`Server running on [${server.address().address}]:${server.address().port} (${server.address().family})`);
 });
 
 
@@ -285,7 +338,8 @@ console.log(`Listening on port ${port}`);
 function broadcast(msg)
 {
     msg = JSON.stringify(msg);
-    console.log("BROADCAST:", msg);
+    if (cl.verbose)
+        console.log("WebSocket Broadcast:", msg);
     for (let i=0; i<sockets.length; i++)
     {
         sockets[i].send(msg);
@@ -294,12 +348,17 @@ function broadcast(msg)
 
 // Graceful shutdown handlers
 function gracefulClose(signal) {
-    console.log(`Received ${signal}`);
+    if (cl.verbose)
+        console.log(`Received ${signal}`);
+
     midiInput.closePort();
     for (let i=0; i<sockets.length; i++)
         sockets[i].close();
     server.closeAllConnections();
-    server.close( () => { console.log('HTTP(S) server closed') } );
+    server.close( () => { 
+        if (cl.verbose)
+            console.log('Server closed.') 
+    } );
 }
 process.on('SIGINT', gracefulClose);
 process.on('SIGTERM', gracefulClose);
