@@ -44,7 +44,8 @@ To setup the media server:
 
 2. In the created folder, create a file named `config.json` similar to that shown below.
 
-    Replace the `midiPort` setting with the name of the MIDI port the server should listen on.
+    Replace the `midiPort` setting with the name of the MIDI port the server should listen on. To
+    display a list of available MIDI ports run the command `cantabile-media-server --list-midi-devices`
 
     Adjust other settings as appropriate.
 
@@ -147,3 +148,17 @@ The server can be configured to run across multiple machines:
 * The program list can reference non-locally served files by prefixing the media file with `http://`
 
 
+## Command Line
+
+The `cantabile-media-server` commands supports the following command line arguments:
+
+```
+Usage: cantabile-media-server [options]
+
+Options:
+   --list-midi-devices      Shows a list of available midi devices
+   --watch                  Watch and automatically reload program list file when changed
+   --verbose                Shows more logging
+   --help                   Shows this help
+   --version                Shows version info
+```
