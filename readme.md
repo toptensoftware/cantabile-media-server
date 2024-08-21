@@ -77,6 +77,10 @@ To setup the media server:
     5: static2.jpg
     6: static3.jpg
 
+    # WebRTC/WHEP realtime (camera) feeds are supported using webrtc+(url) format.  
+    # Note: the URL must be the WHEP endpoint
+    7: webrtc+http://localhost:8889/camera1/whep
+
     # program numbers can be in msb.lsb.pr format
     10.20.30: video1.webm
 
@@ -146,6 +150,28 @@ The server can be configured to run across multiple machines:
   setting in `config.json`.  This can be used to create a separate media only server from which to 
   source media files.
 * The program list can reference non-locally served files by prefixing the media file with `http://`
+
+
+## Camera/Real-time Feeds
+
+WebRTC feeds with a correct WHEP implementation are supported for real-time camera feeds.
+
+To indicate to cantabile-media-server that a URL represents a webrtc feed prefix the
+full WHEP endpoint url with webrtc+(url).
+
+eg: suppose your realtime feed's WHEP end point is 
+
+```http://localhost:8889/camera1/whep```
+
+then full URL to be used in programList.txt would be 
+
+```webrtc+http://localhost:8889/camera1/whep```
+
+This is known to work with [mediamtx](https://github.com/bluenviron/mediamtx).
+
+It currently does _not_ work with [go2rtc](https://github.com/AlexxIT/go2rtc) due to an
+incomplete WHEP implementation.  Hopefully this will be rectified soon - [see here](https://github.com/AlexxIT/go2rtc/issues/1315).
+
 
 
 ## Command Line

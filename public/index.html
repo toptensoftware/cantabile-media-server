@@ -12,35 +12,30 @@ body
     margin: 0;
 }
 
-#videoContainer
+#mediaContainer
 {
     width: 640px; 
     height: 480px;
 }
 
-#video
+.mediaElement
 {
     width: 100%; 
     height: 100%;
     background-color: black;
-    display: none;
 }
 
-#image
+img.mediaElement
 {
-    width: 100%; 
-    height: 100%;
-    background-color: black;
-    display: none;
     object-fit: contain;
 }
 
 </style>
+<script src="webrtc_video_stream.js"></script>
 </head>
 <body>
-    <div id="videoContainer">
-        <video id="video" src=""></video>
-        <img id="image" src=""/>
+    <div id="mediaContainer">
+        <!-- media elements will be inserted here -->
     </div>
     <div id="controls">
         Channel:
@@ -67,24 +62,23 @@ body
 </div>
 
 
-<script>
+<script type="module">
+
+import { WHEPClient } from "/whip-whep/whep.js";
 
 // In edge/chrome -> settings -> media autoplay -> allow -> add site, or turn off limiting globally.
 
 // State
+let mediaController = null;
 let activeChannel = -1;
 let channelState = null;
 
 // Get element
-let video = document.getElementById("video");
 let selChannel = document.getElementById("channel");
-
-// Turn off sound
-video.volume = 0;
 
 // Full-screen button handler
 document.getElementById("btnFullScreen").onclick = (event) => {
-    document.getElementById("videoContainer").requestFullscreen();
+    document.getElementById("mediaContainer").requestFullscreen();
 }
 
 // URL Hash <-> Channel selector
@@ -137,24 +131,30 @@ async function loadChannel()
 
 function onChannelStateChanged()
 {
-    // Update the displayed media
-    if (channelState.mimeType.startsWith("video/"))
+    // Store old media controller
+    let oldMediaController = mediaController;
+    mediaController = null;
+
+    // Create new media controller
+    if (channelState.mediaFile?.startsWith("webrtc+"))
     {
-        video.setAttribute('src', channelState.mediaFile ?? "");
-        video.style['display'] = 'inline';
-        image.style.removeProperty("display");
+        mediaController = webrtcMediaController(channelState.mediaFile.substring("webrtc+".length));
+    }
+    else if (channelState.mimeType.startsWith("video/"))
+    {
+        mediaController = videoMediaController(channelState.mediaFile);
     }
     else if (channelState.mimeType.startsWith("image/"))
     {
-        image.setAttribute('src', channelState.mediaFile ?? "");
-        image.style['display'] = 'inline';
-        video.style.removeProperty("display");
+        mediaController = imageMediaController(channelState.mediaFile);
     }
-    else
-    {
-        image.style['display'] = 'none';
-        video.style['display'] = 'none';
-    }
+
+    // Insert media element into document
+    if (mediaController != null)
+        document.getElementById("mediaContainer").appendChild(mediaController.element);
+
+    // Remove old media
+    oldMediaController?.close();
 }
 
 // WebSocket handler
@@ -170,16 +170,15 @@ ws.onmessage = (event) => {
     switch (msg.action)
     {
         case 'play':
-            video.play();
+            mediaController.play?.();
             break;
 
         case 'pause':
-            video.pause();
+            mediaController.pause?.();
             break;
 
         case 'stop':
-            video.pause();
-            video.currentTime = 0;
+            mediaController.stop?.();
             break;
 
         case 'load':
@@ -188,6 +187,86 @@ ws.onmessage = (event) => {
             break;
     }
 };
+
+function imageMediaController(mediaFile)
+{
+    let element = document.createElement("img");
+    element.classList.add("mediaElement");
+    element.setAttribute('src', mediaFile);
+
+    return {
+        close: () => element.remove(),
+        element, 
+    }
+}
+
+function videoMediaController(mediaFile)
+{
+    let element = document.createElement("video");
+    element.classList.add("mediaElement");
+    element.setAttribute('src', mediaFile);
+    element.muted = true;
+
+    return {
+        close: () => { element.pause(); element.remove(); },
+        play: () => element.play(),
+        pause: () => element.pause(),
+        stop: () => { element.pause(); element.currentTime = 0; },
+        element, 
+    }
+}
+
+function webrtcMediaController(whep_url)
+{
+    // Create element
+    let element = document.createElement("video");
+    element.classList.add("mediaElement");
+    element.muted = true;
+
+    // Setup RTC connection
+    const pc = window.pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
+    pc.addTransceiver("audio");
+    pc.addTransceiver("video");
+    pc.ontrack = (event) =>
+    {
+        if (event.track.kind == "video")
+        {
+            element.srcObject = event.streams[0];
+            element.play();
+        }
+    }
+
+    //Create whep client
+    const whep = new WHEPClient();
+    whep.view(pc, whep_url);
+
+    return {
+        close: () => {
+            element.pause();
+            whep.stop();
+            element.remove();
+        },
+        element,
+    }
+}
+
+/*
+//let url = "http://localhost:1984/api/webrtc?src=stream_1/";
+let stream = new WebRtcVideoStream(url, {
+    onTrack: (stream) => {
+        video.srcObject = stream,
+        video.play();
+    },
+    onError: (err) => alert(err.message),
+});
+
+let whep_url = "http://localhost:8889/mystream/whep";
+//let whep_url = "http://localhost:1984/api/webrtc?src=stream_1";
+
+
+
+*/
+
 
 </script>
 

@@ -95,6 +95,9 @@ let channelStates = [...Array(16)].map(function () { return  {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+// Package-schmackage
+app.use("/whip-whep", express.static(path.join(__dirname, "./node_modules/whip-whep")));
+
 // Setup session parser
 let sessionParser = session({
     saveUninitialized: false,
