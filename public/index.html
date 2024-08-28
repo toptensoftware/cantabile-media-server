@@ -138,15 +138,15 @@ function onChannelStateChanged()
     // Create new media controller
     if (channelState.mediaFile?.startsWith("webrtc+"))
     {
-        mediaController = webrtcMediaController(channelState.mediaFile.substring("webrtc+".length));
+        mediaController = webrtcMediaController(channelState);
     }
     else if (channelState.mimeType.startsWith("video/"))
     {
-        mediaController = videoMediaController(channelState.mediaFile);
+        mediaController = videoMediaController(channelState);
     }
     else if (channelState.mimeType.startsWith("image/"))
     {
-        mediaController = imageMediaController(channelState.mediaFile);
+        mediaController = imageMediaController(channelState);
     }
 
     // Insert media element into document
@@ -174,7 +174,7 @@ ws.onmessage = (event) => {
             break;
 
         case 'pause':
-            mediaController.pause?.();
+            mediaController.pause?.(msg.currentTime);
             break;
 
         case 'stop':
@@ -192,7 +192,7 @@ function imageMediaController(mediaFile)
 {
     let element = document.createElement("img");
     element.classList.add("mediaElement");
-    element.setAttribute('src', mediaFile);
+    element.setAttribute('src', channelState.mediaFile);
 
     return {
         close: () => element.remove(),
@@ -200,24 +200,28 @@ function imageMediaController(mediaFile)
     }
 }
 
-function videoMediaController(mediaFile)
+function videoMediaController(channelState)
 {
+
     let element = document.createElement("video");
     element.classList.add("mediaElement");
-    element.setAttribute('src', mediaFile);
+    element.setAttribute('src', channelState.mediaFile);
     element.muted = true;
+    element.currentTime = channelState.currentTime;
 
     return {
         close: () => { element.pause(); element.remove(); },
         play: () => element.play(),
-        pause: () => element.pause(),
+        pause: (position) => { element.pause(); element.currentTime = position; },
         stop: () => { element.pause(); element.currentTime = 0; },
         element, 
     }
 }
 
-function webrtcMediaController(whep_url)
+function webrtcMediaController(channelState)
 {
+    let whep_url = channelState.mediaFile.substring("webrtc+".length);
+
     // Create element
     let element = document.createElement("video");
     element.classList.add("mediaElement");
@@ -242,7 +246,7 @@ function webrtcMediaController(whep_url)
 
     return {
         close: () => {
-            element.pause();
+            element.pause(0);
             whep.stop();
             element.remove();
         },

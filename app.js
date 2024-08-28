@@ -12,6 +12,7 @@ import { parseCommandLine } from './commandLine.js';
 import { ProgramList } from './programList.js';
 import { MidiMessage, MidiController, MidiMmc } from './midiTypes.js';
 import { mimeTypeFromFile } from './mimeTypes.js';
+import { formatSmpte, qframesToSmpte, smpteToQFrames } from './smpte.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -45,6 +46,12 @@ if (cl.listMidiDevices)
 let app = express(); 
 let sockets = [];
 let programList = null;
+
+let smpteFormat = 3;
+let smpteQFrameNumber = 0;
+let smptePlaying = false;
+let smptePieceMask = 0;
+let smptePieces = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
 
 // Load config
 let config = JSON.parse(fs.readFileSync("config.json", "utf8"));
@@ -80,16 +87,110 @@ if (config.programList !== undefined)
     }
 }
 
-// Setup initial state of each channel
-let initialMediaFile = programList == null ? null : qualifyMediaFile(programList.getMediaFile(0));
-let initialMimeType = mimeTypeFromFile(initialMediaFile);
-let channelStates = [...Array(16)].map(function () { return  { 
-    bank: 0,
-    programNumber: 0,
-    mediaFile: initialMediaFile,
-    mimeType: initialMimeType,
-}});
+class ChannelState
+{
+    constructor(channel, initialMediaFile)
+    {
+        this.#channel = channel;
+        this.mediaFile = initialMediaFile;
+    }
 
+    bank = 0;
+    programNumber = 0;
+    #baseTime = 0;
+    #startPlayTime = null;
+
+    #channel;
+    #mediaFile = null;
+    #mimeType = null;
+    #isSynced = false;
+
+    get mediaFile() 
+    {
+        return this.#mediaFile; 
+    }
+
+    set mediaFile(value)
+    {
+        this.#mediaFile = value;
+        this.#mimeType = mimeTypeFromFile(value);
+        this.#isSynced = 
+            this.#mimeType != null &&
+            this.#mimeType.startsWith("video/") && 
+            !this.#mediaFile.startsWith("webrtc+");
+        this.#baseTime = 0;
+        this.#startPlayTime = null;
+    }
+
+    get currentTime()
+    {
+        if (this.#startPlayTime != null)
+            return this.#baseTime + (Date.now() - this.#startPlayTime) / 1000;
+        else
+            return this.#baseTime;
+    }
+
+    get isPlaying()
+    {
+        return this.#startPlayTime != null;
+    }
+
+    play()
+    {
+        if (!this.#isSynced)
+            return;
+
+        if (this.#startPlayTime == null)
+        {
+            this.#startPlayTime = Date.now();
+            broadcast({ action: 'play', channel: this.#channel, currentTime: this.currentTime });
+        }
+    }
+
+    pause()
+    {
+        if (!this.#isSynced)
+            return;
+
+        if (this.#startPlayTime != null)
+        {
+            this.#baseTime = this.currentTime;
+            this.#startPlayTime = null;
+            broadcast({ action: 'pause', channel: this.#channel, currentTime: this.currentTime });
+        }
+    }
+
+    stop()
+    {
+        if (!this.#isSynced)
+            return;
+
+        this.#startPlayTime = null;
+        this.#baseTime = 0;
+        broadcast({ action: 'stop', channel: this.#channel});
+    }
+
+    render()
+    {
+        return {
+            channel: this.#channel,
+            bank: this.bank,
+            programNumber: this.programNumber,
+            mediaFile: this.#mediaFile,
+            mimeType: this.#mimeType,
+            currentTime: this.currentTime,
+            isPlaying: this.isPlaying,
+        }
+    }
+}
+
+// Create channel states
+let initialMediaFile = programList == null ? null : qualifyMediaFile(programList.getMediaFile(0));
+let channelStates = [];
+for (let i=0; i<16; i++)
+{
+    channelStates.push(new ChannelState(i, initialMediaFile));
+}
 
 // Setup express
 app.use(express.json());
@@ -145,20 +246,138 @@ app.get('/channelState/:channel', (req, res) => {
     if (channel < 0 && channel > 15)
         throw new Error("Invalid channel number");
 
-    res.json(channelStates[channel]);
+    res.set('Cache-Control', 'no-store');
+    res.json(channelStates[channel].render());
 });
 
 // List available midi ports
 let midiInput = new midi.Input();
 
 // Don't ignore sys-ex
-midiInput.ignoreTypes(false, true, true);
+midiInput.ignoreTypes(false, false, true);
 
 // MIDI message handler
 midiInput.on('message', (deltaTime, m) => {
 
     try
     {
+        if ((m[0] & 0xF0) == 0xF0)
+        {
+            switch (m[0])
+            {
+                case MidiMessage.MtcQuarterFrame:
+                {
+                    // If we're receiving MTC quarter frames then we're playing
+                    smptePlaying = true;
+
+                    // Update the current q-frame number
+                    smpteQFrameNumber++;
+
+                    // Update the current piece
+                    let piece = (m[1] & 0x70) >> 4;
+                    smptePieces[piece] = m[1] & 0x0F;
+
+                    // Track which pieces have been received
+                    smptePieceMask |= 1 << piece;
+
+                    // If this is piece 7 and we received all 8 pieces
+                    if (piece == 7 && smptePieceMask == 0xFF)
+                    {
+                        // Update format
+                        smpteFormat = (smptePieces[7] >> 1) & 3;
+
+                        // Calculate new qframe number
+                        let newSmpteQFrameNumber = smpteToQFrames(
+                            smpteFormat,
+                            (smptePieces[6] & 0x0f) | ((smptePieces[7] & 0x01) << 4),
+                            (smptePieces[4] & 0x0f) | ((smptePieces[5] & 0x03) << 4),
+                            (smptePieces[2] & 0x0f) | ((smptePieces[3] & 0x03) << 4),
+                            (smptePieces[0] & 0x0f) | ((smptePieces[1] & 0x01) << 4),
+                            0
+                            ) + 8;  // transmission of current qframe started 2 frames ago, catch up.
+
+                        // These should sync, display a warning if they don't
+                        if (smpteQFrameNumber != newSmpteQFrameNumber)
+                        {
+                            console.log(`Unexpected SMPTE partial frame - jumping (${smpteQFrameNumber} != ${newSmpteQFrameNumber}) [${smptePieces}]`);
+                            smpteQFrameNumber = newSmpteQFrameNumber;
+                        }
+
+                        // Reset mask of received pieces
+                        smptePieceMask = 0;
+                    }
+                    
+                    // Log time
+                    logSmpteTime();
+                    break;
+                }
+
+                case MidiMessage.Sysex:
+                {
+                    // MMC Play/Pause/Stop
+                    if (m.length == 6 && m[1] == 0x7f && m[3] == 6)
+                    {
+                        // MMC command message
+                        let deviceId = m[2];
+                        if (deviceId >= 0 && deviceId <= 16)
+                        {
+                            switch (m[4])
+                            {
+                                case MidiMmc.Play:
+                                    if (deviceId == 0)
+                                        channelStates.forEach(x => x.play());
+                                    else
+                                        channelStates[deviceId-1].play();
+                                    break;
+            
+                                case MidiMmc.Pause:
+                                    if (deviceId == 0)
+                                        channelStates.forEach(x => x.pause());
+                                    else
+                                        channelStates[deviceId-1].pause();
+                                    break;
+                    
+                                case MidiMmc.Stop:
+                                    if (deviceId == 0)
+                                        channelStates.forEach(x => x.stop());
+                                    else
+                                        channelStates[deviceId-1].stop();
+                                    break;
+                            }
+                        }
+                    }
+
+                    // MTC Full Frame
+                    if (m.length == 10 && m[1] == 0x7F && m[2] == 0x7f && m[3] == 1 && m[4] == 1)
+                    {
+                        // Update format
+                        smpteFormat = (m[5] >> 5) & 0x03;
+
+                        // Calculate new position
+                        smpteQFrameNumber = smpteToQFrames(
+                            smpteFormat, 
+                            m[5] & 0x1f,    // Hours
+                            m[6],           // Minutes
+                            m[7],           // Seconds
+                            m[8],           // Frames
+                            0);             // QFrames
+
+                        // No longer playing
+                        smptePlaying = 0;
+
+                        // Clear piece mask
+                        smptePieceMask = 0;
+
+                        // Log it
+                        logSmpteTime();
+                    }
+                    break;
+                }
+            }
+            return;
+        }
+
+        // Channel messages
         let channel = m[0] & 0x0F;
         switch (m[0] & 0xF0)
         {
@@ -183,38 +402,11 @@ midiInput.on('message', (deltaTime, m) => {
                 OnProgramChange(channel, m[1]);
                 break;
             }
-
-            case 0xF0:
-                switch (m[0])
-                {
-                    case MidiMessage.Sysex:
-                        if (m.length == 6 && m[1] == 0x7f && m[3] == 6)
-                        {
-                            // MMC command message
-                            let deviceId = m[2];
-                            switch (m[4])
-                            {
-                                case MidiMmc.Play:
-                                    broadcast({ action: 'play', channel: deviceId-1});
-                                    break;
-            
-                                case MidiMmc.Pause:
-                                    broadcast({ action: 'pause', channel: deviceId-1});
-                                    break;
-                    
-                                case MidiMmc.Stop:
-                                    broadcast({ action: 'stop', channel: deviceId-1});
-                                    break;
-                            }
-                        }
-                        break;
-                }
-                break;
-        }
+       }
     }
     catch (err)
     {
-        console.err(err.message);
+        console.error(err.message);
     }
 
 });
@@ -248,7 +440,6 @@ function OnProgramChange(channel, programNumber, ignoreRedundant)
 
     // Store media file in channel state
     channelState.mediaFile = mediaFile;
-    channelState.mimeType = mimeTypeFromFile(mediaFile);
 
     if (cl.verbose)
         console.log(`loading media file ${mediaFile} on ch ${channel}`);
@@ -376,5 +567,10 @@ function qualifyMediaFile(mediaFile)
     if (mediaFile.startsWith("/"))
         mediaFile = mediaFile.substring(1);
     return "/media/" + mediaFile;
+}
+
+function logSmpteTime()
+{
+    process.stdout.write(formatSmpte(qframesToSmpte(smpteFormat, smpteQFrameNumber)) + '\r');
 }
 
