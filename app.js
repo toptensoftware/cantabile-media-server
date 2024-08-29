@@ -7,12 +7,13 @@ import http from 'node:http';
 import express from 'express';
 import session from 'express-session';
 import midi from '@julusian/midi';
+import JSON5 from 'json5';
 import { WebSocketServer } from 'ws';
 import { parseCommandLine } from './commandLine.js';
 import { ProgramList } from './programList.js';
 import { MidiMessage, MidiController, MidiMmc } from './midiTypes.js';
 import { mimeTypeFromFile } from './mimeTypes.js';
-import { formatSmpte, qframesToSmpte, smpteToQFrames } from './smpte.js';
+import { formatSmpte, qframesToSmpte, smpteToQFrames, qframesToSeconds } from './smpte.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -47,14 +48,16 @@ let app = express();
 let sockets = [];
 let programList = null;
 
-let smpteFormat = 3;
-let smpteQFrameNumber = 0;
-let smptePlaying = false;
-let smptePieceMask = 0;
-let smptePieces = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+let mtcFormat = 3;
+let mtcQFrameNumber = 0;
+let mtcTime = 0;
+let mtcIsPlaying = false;
+let mtcPieceMask = 0;
+let mtcPieces = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+let mtcChannels = [];
 
 // Load config
-let config = JSON.parse(fs.readFileSync("config.json", "utf8"));
+let config = JSON5.parse(fs.readFileSync("config.json", "utf8"));
 if (cl.verbose)
     console.log(config);
 
@@ -103,7 +106,7 @@ class ChannelState
     #channel;
     #mediaFile = null;
     #mimeType = null;
-    #isSynced = false;
+    #hasTransport = false;
 
     get mediaFile() 
     {
@@ -114,7 +117,7 @@ class ChannelState
     {
         this.#mediaFile = value;
         this.#mimeType = mimeTypeFromFile(value);
-        this.#isSynced = 
+        this.#hasTransport = 
             this.#mimeType != null &&
             this.#mimeType.startsWith("video/") && 
             !this.#mediaFile.startsWith("webrtc+");
@@ -124,49 +127,95 @@ class ChannelState
 
     get currentTime()
     {
-        if (this.#startPlayTime != null)
-            return this.#baseTime + (Date.now() - this.#startPlayTime) / 1000;
-        else
-            return this.#baseTime;
+        if (!this.#hasTransport)
+            return null;
+
+        switch (this.syncMode)
+        {
+            case 'master':
+                if (this.#startPlayTime != null)
+                    return this.#baseTime + (Date.now() - this.#startPlayTime) / 1000;
+                else
+                    return this.#baseTime;
+
+            case 'mtc':
+                return mtcTime;
+        }
+
+        return null;
     }
 
     get isPlaying()
     {
-        return this.#startPlayTime != null;
+        if (!this.#hasTransport)
+            return false;
+
+        switch (this.syncMode)
+        {
+            case 'master':
+                return this.#startPlayTime != null;
+
+            case 'mtc':
+                return mtcIsPlaying;
+        }
+
+        return false;
     }
 
     play()
     {
-        if (!this.#isSynced)
+        if (!this.#hasTransport)
             return;
 
-        if (this.#startPlayTime == null)
+        if (this.syncMode == 'master')
         {
+            if (this.#startPlayTime != null)
+                return;
             this.#startPlayTime = Date.now();
-            broadcast({ action: 'play', channel: this.#channel, currentTime: this.currentTime });
-        }
+            this.onPlay()
+        }   
+    }
+    
+    onPlay()
+    {
+        broadcast({ action: 'play', channel: this.#channel, currentTime: this.currentTime });
     }
 
     pause()
     {
-        if (!this.#isSynced)
+        if (!this.#hasTransport)
             return;
 
-        if (this.#startPlayTime != null)
+        if (this.syncMode == 'master')
         {
-            this.#baseTime = this.currentTime;
+            if (this.#startPlayTime == null)
+                return;
             this.#startPlayTime = null;
-            broadcast({ action: 'pause', channel: this.#channel, currentTime: this.currentTime });
+            this.onPause();
         }
+
+    }
+
+    onPause()
+    {
+        broadcast({ action: 'pause', channel: this.#channel, currentTime: this.currentTime });
     }
 
     stop()
     {
-        if (!this.#isSynced)
+        if (!this.#hasTransport)
             return;
 
-        this.#startPlayTime = null;
-        this.#baseTime = 0;
+        if (this.syncMode == 'master')
+        {
+            this.#startPlayTime = null;
+            this.#baseTime = 0;
+            this.onStop();
+        }
+    }
+    
+    onStop()
+    {
         broadcast({ action: 'stop', channel: this.#channel});
     }
 
@@ -189,7 +238,21 @@ let initialMediaFile = programList == null ? null : qualifyMediaFile(programList
 let channelStates = [];
 for (let i=0; i<16; i++)
 {
-    channelStates.push(new ChannelState(i, initialMediaFile));
+    // Create default channel state
+    var cs = new ChannelState(i, initialMediaFile);
+
+    // Merge state from config
+    if (typeof(config.channels[i]) === 'object')
+    {
+        Object.assign(cs, config.channels[i]);
+    }
+
+    // Add to list
+    channelStates.push(cs);
+
+    // Keep a separate list of MTC channels
+    if (cs.syncMode == 'mtc')
+        mtcChannels.push(cs);
 }
 
 // Setup express
@@ -239,17 +302,6 @@ app.get('/media/:file(*)', (req, res, next) => {
 // Static handler for non-streamed media files
 app.use("/media", express.static(config.baseDir));
 
-// Request from web browser to get current state of a channel
-app.get('/channelState/:channel', (req, res) => {
-
-    let channel = parseInt(req.params.channel);
-    if (channel < 0 && channel > 15)
-        throw new Error("Invalid channel number");
-
-    res.set('Cache-Control', 'no-store');
-    res.json(channelStates[channel].render());
-});
-
 // List available midi ports
 let midiInput = new midi.Input();
 
@@ -267,48 +319,58 @@ midiInput.on('message', (deltaTime, m) => {
             {
                 case MidiMessage.MtcQuarterFrame:
                 {
+                    let mtcWasPlaying = mtcIsPlaying;
+
                     // If we're receiving MTC quarter frames then we're playing
-                    smptePlaying = true;
+                    mtcIsPlaying = true;
 
                     // Update the current q-frame number
-                    smpteQFrameNumber++;
+                    mtcQFrameNumber++;
 
                     // Update the current piece
                     let piece = (m[1] & 0x70) >> 4;
-                    smptePieces[piece] = m[1] & 0x0F;
+                    mtcPieces[piece] = m[1] & 0x0F;
 
                     // Track which pieces have been received
-                    smptePieceMask |= 1 << piece;
+                    mtcPieceMask |= 1 << piece;
 
                     // If this is piece 7 and we received all 8 pieces
-                    if (piece == 7 && smptePieceMask == 0xFF)
+                    if (piece == 7 && mtcPieceMask == 0xFF)
                     {
                         // Update format
-                        smpteFormat = (smptePieces[7] >> 1) & 3;
+                        mtcFormat = (mtcPieces[7] >> 1) & 3;
 
                         // Calculate new qframe number
-                        let newSmpteQFrameNumber = smpteToQFrames(
-                            smpteFormat,
-                            (smptePieces[6] & 0x0f) | ((smptePieces[7] & 0x01) << 4),
-                            (smptePieces[4] & 0x0f) | ((smptePieces[5] & 0x03) << 4),
-                            (smptePieces[2] & 0x0f) | ((smptePieces[3] & 0x03) << 4),
-                            (smptePieces[0] & 0x0f) | ((smptePieces[1] & 0x01) << 4),
+                        let newQFrameNumber = smpteToQFrames(
+                            mtcFormat,
+                            (mtcPieces[6] & 0x0f) | ((mtcPieces[7] & 0x01) << 4),
+                            (mtcPieces[4] & 0x0f) | ((mtcPieces[5] & 0x03) << 4),
+                            (mtcPieces[2] & 0x0f) | ((mtcPieces[3] & 0x03) << 4),
+                            (mtcPieces[0] & 0x0f) | ((mtcPieces[1] & 0x01) << 4),
                             0
                             ) + 8;  // transmission of current qframe started 2 frames ago, catch up.
 
                         // These should sync, display a warning if they don't
-                        if (smpteQFrameNumber != newSmpteQFrameNumber)
+                        if (mtcQFrameNumber != newQFrameNumber)
                         {
-                            console.log(`Unexpected SMPTE partial frame - jumping (${smpteQFrameNumber} != ${newSmpteQFrameNumber}) [${smptePieces}]`);
-                            smpteQFrameNumber = newSmpteQFrameNumber;
+                            console.log(`Unexpected SMPTE partial frame - jumping (${mtcQFrameNumber} != ${newQFrameNumber}) [${mtcPieces}]`);
+                            mtcQFrameNumber = newQFrameNumber;
                         }
 
                         // Reset mask of received pieces
-                        smptePieceMask = 0;
+                        mtcPieceMask = 0;
                     }
                     
                     // Log time
+                    mtcTime = qframesToSeconds(mtcFormat, mtcQFrameNumber);
                     logSmpteTime();
+
+                    // Start playback on all MTC channels
+                    if (!mtcWasPlaying)
+                    {
+                        for (let cs of mtcChannels)
+                            cs.onPlay();
+                    }
                     break;
                 }
 
@@ -350,12 +412,14 @@ midiInput.on('message', (deltaTime, m) => {
                     // MTC Full Frame
                     if (m.length == 10 && m[1] == 0x7F && m[2] == 0x7f && m[3] == 1 && m[4] == 1)
                     {
+                        let mtcWasPlaying = mtcIsPlaying;
+
                         // Update format
-                        smpteFormat = (m[5] >> 5) & 0x03;
+                        mtcFormat = (m[5] >> 5) & 0x03;
 
                         // Calculate new position
-                        smpteQFrameNumber = smpteToQFrames(
-                            smpteFormat, 
+                        mtcQFrameNumber = smpteToQFrames(
+                            mtcFormat, 
                             m[5] & 0x1f,    // Hours
                             m[6],           // Minutes
                             m[7],           // Seconds
@@ -363,13 +427,18 @@ midiInput.on('message', (deltaTime, m) => {
                             0);             // QFrames
 
                         // No longer playing
-                        smptePlaying = 0;
+                        mtcIsPlaying = false;
 
                         // Clear piece mask
-                        smptePieceMask = 0;
+                        mtcPieceMask = 0;
 
                         // Log it
+                        mtcTime = qframesToSeconds(mtcFormat, mtcQFrameNumber);
                         logSmpteTime();
+                        
+                        // Pause all MTC channels
+                        for (let cs of mtcChannels)
+                            cs.onPause();
                     }
                     break;
                 }
@@ -448,7 +517,7 @@ function OnProgramChange(channel, programNumber, ignoreRedundant)
     broadcast({
         action: 'load',
         channel,
-        channelState,
+        channelState: channelState.render(),
     });
 }
 
@@ -513,6 +582,29 @@ wss.on('connection', function (ws, request) {
         console.log(`new socket connection (count=${sockets.length})`);
     sockets.push(ws);
 
+    ws.on('message', function(data) {
+        let msg = JSON.parse(data.toString('utf8'));
+        switch (msg.action)
+        {
+            case 'setChannelMask':
+                // Client is asking for the channel states for a set of channels
+                let result = {};
+                for (let i=0; i<16; i++)
+                {
+                    if ((msg.channelMask & (1 << i)) != 0)
+                    {
+                        result[i] = channelStates[i].render();
+                    }
+                }
+                ws.send(JSON.stringify({ 
+                    action: 'channelStates', 
+                    channelStates: result
+                }));
+                ws.channelMask = msg.channelMask;
+                break;
+        }
+    });
+
     ws.on('error', console.error);
   
     ws.on('close', function () {
@@ -534,9 +626,22 @@ function broadcast(msg)
     msg = JSON.stringify(msg);
     if (cl.verbose)
         console.log("WebSocket Broadcast:", msg);
+
+    // Only send to sockets that are interested
+    let channelMask = 0xff;
+    if (msg.channelMask !== undefined)
+        channelMask = msg.channelMask;
+    else if (msg.channel !== undefined)
+        channelMask = 1 << msg.channel;
+
+    // Broadcast
     for (let i=0; i<sockets.length; i++)
     {
-        sockets[i].send(msg);
+        let ws = sockets[i];
+        if ((ws.channelMask & channelMask) != 0)
+        {
+            ws.send(msg);
+        }
     }
 }
 
@@ -571,6 +676,6 @@ function qualifyMediaFile(mediaFile)
 
 function logSmpteTime()
 {
-    process.stdout.write(formatSmpte(qframesToSmpte(smpteFormat, smpteQFrameNumber)) + '\r');
+    process.stdout.write(formatSmpte(qframesToSmpte(mtcFormat, mtcQFrameNumber)) + '\r');
 }
 

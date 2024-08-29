@@ -31,7 +31,6 @@ img.mediaElement
 }
 
 </style>
-<script src="webrtc_video_stream.js"></script>
 </head>
 <body>
     <div id="mediaContainer">
@@ -72,13 +71,16 @@ import { WHEPClient } from "/whip-whep/whep.js";
 let mediaController = null;
 let activeChannel = -1;
 let channelState = null;
+let socketOpen = false;
+let embed = null;
 
 // Get element
 let selChannel = document.getElementById("channel");
 
 // Full-screen button handler
 document.getElementById("btnFullScreen").onclick = (event) => {
-    document.getElementById("mediaContainer").requestFullscreen();
+    //document.getElementById("mediaContainer").requestFullscreen();
+    embed.contentWindow.scrollTo(0, 1000);
 }
 
 // URL Hash <-> Channel selector
@@ -111,6 +113,10 @@ function hashChanged()
 
 async function loadChannel()
 {
+    // Quit if socket not yet open
+    if (!socketOpen)
+        return;
+
     // Get currently selected channel
     let channel = parseInt(selChannel.value);
     if (channel == activeChannel || channel < 0 || channel > 15)
@@ -122,11 +128,11 @@ async function loadChannel()
     // Clear channel state until retrieved
     channelState = null;
 
-    // Get the current channel state from server
-    let response = await fetch(`/channelState/${channel}`);
-    channelState = await response.json();
-
-    onChannelStateChanged();
+    // Send command requesting state of active channel
+    ws.send(JSON.stringify({ 
+        action: "setChannelMask", 
+        channelMask: 1 << activeChannel
+    }));
 }
 
 function onChannelStateChanged()
@@ -135,18 +141,25 @@ function onChannelStateChanged()
     let oldMediaController = mediaController;
     mediaController = null;
 
-    // Create new media controller
-    if (channelState.mediaFile?.startsWith("webrtc+"))
+    if (channelState != null)
     {
-        mediaController = webrtcMediaController(channelState);
-    }
-    else if (channelState.mimeType.startsWith("video/"))
-    {
-        mediaController = videoMediaController(channelState);
-    }
-    else if (channelState.mimeType.startsWith("image/"))
-    {
-        mediaController = imageMediaController(channelState);
+        // Create new media controller
+        if (channelState.mediaFile?.startsWith("webrtc+"))
+        {
+            mediaController = webrtcMediaController(channelState);
+        }
+        else if (channelState.mimeType.startsWith("video/"))
+        {
+            mediaController = videoMediaController(channelState);
+        }
+        else if (channelState.mimeType.startsWith("image/"))
+        {
+            mediaController = imageMediaController(channelState);
+        }
+        else if (channelState.mimeType == "application/pdf")
+        {
+            mediaController = pdfMediaController(channelState);
+        }
     }
 
     // Insert media element into document
@@ -159,9 +172,27 @@ function onChannelStateChanged()
 
 // WebSocket handler
 let ws = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "/ws");
+ws.onopen = (event) => {
+    socketOpen = true;
+    loadChannel();
+};
+ws.onclose = (event) => {
+    channelState = null;
+    onChannelStateChanged();
+    socketOpen = false;
+};
 ws.onmessage = (event) => {
     var msg = JSON.parse(event.data);
     console.log(msg);
+
+    switch (msg.action)
+    {
+        case 'channelStates':
+            channelState = msg.channelStates[activeChannel] ?? null;
+            onChannelStateChanged();
+            break;
+    }
+
 
     // Check message is for correct channel (or -1 for "all channels")
     if (channelState == null || (msg.channel != activeChannel && msg.channel != -1))
@@ -253,6 +284,21 @@ function webrtcMediaController(channelState)
         element,
     }
 }
+
+function pdfMediaController(mediaFile)
+{
+    let element = document.createElement("iframe");
+    element.classList.add("mediaElement");
+//    element.setAttribute("type", "application/pdf");
+    element.setAttribute('src', channelState.mediaFile + "#toolbar=0&navpanes=0&scrollbar=0");
+    embed = element;
+    return {
+        close: () => element.remove(),
+        element, 
+    }
+}
+
+
 
 </script>
 
