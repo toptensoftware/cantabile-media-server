@@ -190,6 +190,7 @@ class ChannelState
         {
             if (this.#startPlayTime == null)
                 return;
+            this.#baseTime = this.currentTime;
             this.#startPlayTime = null;
             this.onPause();
         }
@@ -644,6 +645,34 @@ function broadcast(msg)
         }
     }
 }
+
+
+// MTC and Master mode video sync broadcast
+// Every 1 second, broadcast a sync event to all playing
+// media streams reporting the current play position
+setInterval(function() {
+    for (let i=0; i<sockets.length; i++)
+    {
+        let ws = sockets[i];
+        let timestamps = {};
+        let any = false;
+        for (let ch = 0; ch < 16; ch++)
+        {
+            // Is the socket interested in this channel and is the channel playing?
+            if ((ws.channelMask & (1 << ch)) != 0 && channelStates[ch].isPlaying)
+            {
+                timestamps[ch] = channelStates[ch].currentTime;
+                any = true;
+            }
+        }
+        if (any)
+            ws.send(JSON.stringify({
+                action: 'sync',
+                timestamps,
+            }));
+    }
+}, 1000);
+
 
 // Graceful shutdown handlers
 function gracefulClose(signal) {

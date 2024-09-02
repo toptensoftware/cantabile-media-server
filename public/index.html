@@ -30,6 +30,11 @@ img.mediaElement
     object-fit: contain;
 }
 
+#latcomp
+{
+    width: 60px;
+}
+
 </style>
 </head>
 <body>
@@ -56,7 +61,11 @@ img.mediaElement
             <option value="14">15</option>
             <option value="15">16</option>
         </select>
+        Latency Compensation:
+        <input id="latcomp" type="number" value="0"/>
+        ms.
         <button id="btnFullScreen">Full-Screen</button>
+        <span id="rate"></span>
     </div>
 </div>
 
@@ -76,6 +85,8 @@ let embed = null;
 
 // Get element
 let selChannel = document.getElementById("channel");
+let latcomp = document.getElementById("latcomp");
+let elRate = document.getElementById("rate");
 
 // Full-screen button handler
 document.getElementById("btnFullScreen").onclick = (event) => {
@@ -94,9 +105,26 @@ else
 }
 window.addEventListener("hashchange", hashChanged);
 selChannel.onchange = () => {
-    document.location.hash = `#ch=${parseInt(selChannel.value) + 1}`;
+    updateHash();
     loadChannel();
 }
+
+latcomp.oninput = updateHash;
+
+function updateHash()
+{
+    let parts = [];
+    if (selChannel.value != 0)
+        parts.push(`ch=${parseInt(selChannel.value) + 1}`);
+    if (latcomp.value != 0)
+        parts.push(`latcomp=${latcomp.value}`);
+
+    if (parts.length == 0)
+        document.location.hash = "";
+    else
+        document.location.hash = `#${parts.join('&')}`;
+}
+
 function hashChanged()
 {
     var state = new URLSearchParams('?' + document.location.hash.substring(1));
@@ -104,8 +132,11 @@ function hashChanged()
     {
         selChannel.value = parseInt(state.get("ch") - 1);
     }
+    if (state.get("latcomp"))
+    {
+        latcomp.value = parseInt(state.get("latcomp"));
+    }
     loadChannel();
-    
 }
 
 
@@ -183,13 +214,19 @@ ws.onclose = (event) => {
 };
 ws.onmessage = (event) => {
     var msg = JSON.parse(event.data);
-    console.log(msg);
 
     switch (msg.action)
     {
         case 'channelStates':
             channelState = msg.channelStates[activeChannel] ?? null;
             onChannelStateChanged();
+            break;
+            
+        case 'sync':
+            if (msg.timestamps[activeChannel] !== undefined)
+            {
+                mediaController.sync?.(msg.timestamps[activeChannel]);
+            }
             break;
     }
 
@@ -239,12 +276,92 @@ function videoMediaController(channelState)
     element.setAttribute('src', channelState.mediaFile);
     element.muted = true;
     element.currentTime = channelState.currentTime;
+//    element.playbackRate = 2;
+
+    let playStartBaseTime = null;
+    let playStartVideoTime = null;
+    let currentLatComp = 0;
+
+    function play()
+    {
+        currentLatComp = latcomp.value / 1000.0;
+        element.currentTime += currentLatComp;
+        playStartBaseTime = Date.now();
+        playStartVideoTime = element.currentTime;
+        element.play();
+    }
+
+    function pause(timestamp)
+    {
+        playStartBaseTime = null;
+        playStartVideoTime = null;
+        element.pause(); 
+        element.currentTime = timestamp;
+        elRate.innerText = "";
+    }
+
+    function stop()
+    {
+        pause(0);
+    }
+
+    function sync(timestamp)
+    {
+        // Quit if we don't have a base time
+        if (playStartBaseTime == null)
+            return;
+
+        // Latency compensation
+        timestamp += currentLatComp;
+
+        // Get current video position
+        let videoPos = element.currentTime;
+
+        // If more than 1 second out of sync, resync immediately
+        if (Math.abs(videoPos - timestamp) > 1)
+        {
+            //console.log("full resync");
+            element.currentTime = timestamp;
+            playStartBaseTime = Date.now();
+            playStartVideoTime = timestamp;
+            return;
+        }   
+
+        // Calculate new rate by comparing server elapsed time to our elapsed time
+        // and calculating an adjustment rate.
+        let localElapsed = (Date.now() - playStartBaseTime) / 1000.0;
+        let serverElapsed = timestamp - playStartVideoTime;
+        let rate = serverElapsed / localElapsed;
+
+        // Also, if we're ahead or behind, calculate a "catch up" factor that should
+        // gradually pull us closer to the target time stamp
+        let catchup = (videoPos - timestamp) / 2;
+
+        //console.log(`server:${timestamp} el: ${videoPos} s_elap:${serverElapsed} l_elap:${localElapsed} rate:${rate} catchup:${catchup}`);
+        //console.log(`rate:${rate - catchup} delta:${timestamp - videoPos}`);
+
+        try
+        {
+            // Set video playback rate
+            element.playbackRate = rate - catchup;
+        }
+        catch
+        {
+            //console.log("full resync due to error");
+            element.currentTime = timestamp;
+            playStartBaseTime = Date.now();
+            playStartVideoTime = timestamp;
+        }
+
+        elRate.innerText = `Rate: x${element.playbackRate.toFixed(3)}`;
+    }
 
     return {
         close: () => { element.pause(); element.remove(); },
-        play: () => element.play(),
-        pause: (position) => { element.pause(); element.currentTime = position; },
-        stop: () => { element.pause(); element.currentTime = 0; },
+        play,
+        pause,
+        stop,
+        sync,
         element, 
     }
 }
