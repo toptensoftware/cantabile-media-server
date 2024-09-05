@@ -14,12 +14,16 @@ body
 
 #mediaContainer
 {
+    position: relative;
     width: 640px; 
     height: 480px;
 }
 
 .mediaElement
 {
+    position: absolute;
+    top: 0;
+    left: 0;    
     width: 100%; 
     height: 100%;
     background-color: black;
@@ -77,11 +81,10 @@ import { WHEPClient } from "/whip-whep/whep.js";
 // In edge/chrome -> settings -> media autoplay -> allow -> add site, or turn off limiting globally.
 
 // State
-let mediaController = null;
+let layerControllers = [];
 let activeChannel = -1;
 let channelState = null;
 let socketOpen = false;
-let embed = null;
 
 // Get element
 let selChannel = document.getElementById("channel");
@@ -90,8 +93,7 @@ let elRate = document.getElementById("rate");
 
 // Full-screen button handler
 document.getElementById("btnFullScreen").onclick = (event) => {
-    //document.getElementById("mediaContainer").requestFullscreen();
-    embed.contentWindow.scrollTo(0, 1000);
+    document.getElementById("mediaContainer").requestFullscreen();
 }
 
 // URL Hash <-> Channel selector
@@ -161,44 +163,74 @@ async function loadChannel()
 
     // Send command requesting state of active channel
     ws.send(JSON.stringify({ 
-        action: "setChannelMask", 
-        channelMask: 1 << activeChannel
+        action: "setChannel", 
+        channel: activeChannel
     }));
 }
 
-function onChannelStateChanged()
+function onLoadChannel(cs)
 {
-    // Store old media controller
-    let oldMediaController = mediaController;
-    mediaController = null;
+    // Store new channel state
+    channelState = cs;
+
+    // Close old layer controllers
+    layerControllers.forEach(x => x.close());
+    layerControllers = [];
 
     if (channelState != null)
     {
-        // Create new media controller
-        if (channelState.mediaFile?.startsWith("webrtc+"))
+        // Allocate array to hold layer controllers
+        for (let i=0; i<cs.layers.length; i++)
         {
-            mediaController = webrtcMediaController(channelState);
-        }
-        else if (channelState.mimeType.startsWith("video/"))
-        {
-            mediaController = videoMediaController(channelState);
-        }
-        else if (channelState.mimeType.startsWith("image/"))
-        {
-            mediaController = imageMediaController(channelState);
-        }
-        else if (channelState.mimeType == "application/pdf")
-        {
-            mediaController = pdfMediaController(channelState);
+            layerControllers.push(null);
+            onLoadLayer(i, cs.layers[i]);
         }
     }
+}
 
-    // Insert media element into document
-    if (mediaController != null)
-        document.getElementById("mediaContainer").appendChild(mediaController.element);
+function onLoadLayer(index, ls)
+{
+    // Create new media controller
+    let layerController;
+    if (ls.mediaFile)
+    {
+        if (ls.mediaFile?.startsWith("webrtc+"))
+        {
+            layerController = webrtcLayerController(ls);
+        }
+        else if (ls.mimeType.startsWith("video/"))
+        {
+            layerController = videoLayerController(ls);
+        }
+        else if (ls.mimeType.startsWith("image/"))
+        {
+            layerController = imageLayerController(ls);
+        }
+        /*
+        else if (ls.mimeType == "application/pdf")
+        {
+            layerController = pdfLayerController(ls);
+        }
+        */
+    }
+    if (layerController == null)
+    {
+        layerController = nullLayerController(index);
+    }
 
-    // Remove old media
-    oldMediaController?.close();
+    // Replace or append
+    if (layerControllers[index])
+    {
+        layerControllers[index].element.replaceWith(layerController.element);
+        layerControllers[index].close();
+    }
+    else
+    {
+        document.getElementById("mediaContainer").appendChild(layerController.element);
+    }
+
+    // Store new media controller
+    layerControllers[index] = layerController;
 }
 
 // WebSocket handler
@@ -208,8 +240,7 @@ ws.onopen = (event) => {
     loadChannel();
 };
 ws.onclose = (event) => {
-    channelState = null;
-    onChannelStateChanged();
+    onLoadChannel(null);
     socketOpen = false;
 };
 ws.onmessage = (event) => {
@@ -217,16 +248,18 @@ ws.onmessage = (event) => {
 
     switch (msg.action)
     {
-        case 'channelStates':
-            channelState = msg.channelStates[activeChannel] ?? null;
-            onChannelStateChanged();
-            break;
-            
         case 'sync':
-            if (msg.timestamps[activeChannel] !== undefined)
+            for (let ts of msg.timestamps)
             {
-                mediaController.sync?.(msg.timestamps[activeChannel]);
+                if (ts.channel == activeChannel)
+                {
+                    layerControllers[ts.layer].sync?.(ts.timestamp);
+                }
             }
+            break;
+
+        case 'loadChannel':
+            onLoadChannel(msg.channelState ?? null);
             break;
     }
 
@@ -238,29 +271,37 @@ ws.onmessage = (event) => {
     switch (msg.action)
     {
         case 'play':
-            mediaController.play?.();
+            layerControllers[msg.layer].play?.();
             break;
 
         case 'pause':
-            mediaController.pause?.(msg.currentTime);
+            layerControllers[msg.layer].pause?.(msg.currentTime);
             break;
 
         case 'stop':
-            mediaController.stop?.();
+            layerControllers[msg.layer].stop?.();
             break;
 
-        case 'load':
-            channelState = msg.channelState;
-            onChannelStateChanged();
+        case 'loadLayer':
+            onLoadLayer(msg.layer, msg.layerState);
             break;
     }
 };
 
-function imageMediaController(mediaFile)
+function nullLayerController(index)
+{
+    let element = document.createComment(`null layer (${index})`);
+    return {
+        close: () => element.remove(),
+        element, 
+    }
+}
+
+function imageLayerController(layer)
 {
     let element = document.createElement("img");
     element.classList.add("mediaElement");
-    element.setAttribute('src', channelState.mediaFile);
+    element.setAttribute('src', layer.mediaFile);
 
     return {
         close: () => element.remove(),
@@ -268,14 +309,14 @@ function imageMediaController(mediaFile)
     }
 }
 
-function videoMediaController(channelState)
+function videoLayerController(layer)
 {
 
     let element = document.createElement("video");
     element.classList.add("mediaElement");
-    element.setAttribute('src', channelState.mediaFile);
+    element.setAttribute('src', layer.mediaFile);
     element.muted = true;
-    element.currentTime = channelState.currentTime;
+    element.currentTime = layer.currentTime;
 //    element.playbackRate = 2;
 
     let playStartBaseTime = null;
@@ -366,9 +407,9 @@ function videoMediaController(channelState)
     }
 }
 
-function webrtcMediaController(channelState)
+function webrtcLayerController(layer)
 {
-    let whep_url = channelState.mediaFile.substring("webrtc+".length);
+    let whep_url = layer.mediaFile.substring("webrtc+".length);
 
     // Create element
     let element = document.createElement("video");
@@ -402,7 +443,8 @@ function webrtcMediaController(channelState)
     }
 }
 
-function pdfMediaController(mediaFile)
+/*
+function pdfLayerController(mediaFile)
 {
     let element = document.createElement("iframe");
     element.classList.add("mediaElement");
@@ -414,6 +456,7 @@ function pdfMediaController(mediaFile)
         element, 
     }
 }
+    */
 
 
 

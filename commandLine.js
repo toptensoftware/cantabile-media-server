@@ -4,7 +4,7 @@ import url from 'node:url';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
-function showVersion()
+export function showVersion()
 {
     let pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json')), "utf8");
 

@@ -17,5 +17,7 @@ let mimeTypes = {
 // Helper to get mimetype of a file from its extension
 export function mimeTypeFromFile(filename)
 {
+    if (!filename)
+        return null;
     return mimeTypes[path.extname(filename).toLowerCase()];
 }

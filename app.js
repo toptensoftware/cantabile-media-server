@@ -9,7 +9,7 @@ import session from 'express-session';
 import midi from '@julusian/midi';
 import JSON5 from 'json5';
 import { WebSocketServer } from 'ws';
-import { parseCommandLine } from './commandLine.js';
+import { parseCommandLine, showVersion } from './commandLine.js';
 import { ProgramList } from './programList.js';
 import { MidiMessage, MidiController, MidiMmc } from './midiTypes.js';
 import { mimeTypeFromFile } from './mimeTypes.js';
@@ -27,6 +27,8 @@ catch (err)
     console.error(err.message);
     process.exit(7);
 }
+
+showVersion();
 
 // List available midi devices?
 if (cl.listMidiDevices)
@@ -54,7 +56,6 @@ let mtcTime = 0;
 let mtcIsPlaying = false;
 let mtcPieceMask = 0;
 let mtcPieces = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
-let mtcChannels = [];
 
 // Load config
 let config = JSON5.parse(fs.readFileSync("config.json", "utf8"));
@@ -90,23 +91,23 @@ if (config.programList !== undefined)
     }
 }
 
-class ChannelState
+class LayerState
 {
-    constructor(channel, initialMediaFile)
+    constructor(channel, layer)
     {
-        this.#channel = channel;
-        this.mediaFile = initialMediaFile;
+        this.channel = channel;
+        this.layer = layer;
+        this.syncMode = config.syncMode ?? "master";
     }
 
-    bank = 0;
-    programNumber = 0;
+    channel = 0;
+    layer = 0;
     #baseTime = 0;
     #startPlayTime = null;
-
-    #channel;
     #mediaFile = null;
     #mimeType = null;
-    #hasTransport = false;
+    hasTransport = false;
+
 
     get mediaFile() 
     {
@@ -117,7 +118,7 @@ class ChannelState
     {
         this.#mediaFile = value;
         this.#mimeType = mimeTypeFromFile(value);
-        this.#hasTransport = 
+        this.hasTransport = 
             this.#mimeType != null &&
             this.#mimeType.startsWith("video/") && 
             !this.#mediaFile.startsWith("webrtc+");
@@ -127,7 +128,7 @@ class ChannelState
 
     get currentTime()
     {
-        if (!this.#hasTransport)
+        if (!this.hasTransport)
             return null;
 
         switch (this.syncMode)
@@ -147,7 +148,7 @@ class ChannelState
 
     get isPlaying()
     {
-        if (!this.#hasTransport)
+        if (!this.hasTransport)
             return false;
 
         switch (this.syncMode)
@@ -164,7 +165,7 @@ class ChannelState
 
     play()
     {
-        if (!this.#hasTransport)
+        if (!this.hasTransport)
             return;
 
         if (this.syncMode == 'master')
@@ -178,12 +179,17 @@ class ChannelState
     
     onPlay()
     {
-        broadcast({ action: 'play', channel: this.#channel, currentTime: this.currentTime });
+        broadcast({ 
+            action: 'play', 
+            channel: this.channel, 
+            layer: this.layer,
+            currentTime: this.currentTime 
+        });
     }
 
     pause()
     {
-        if (!this.#hasTransport)
+        if (!this.hasTransport)
             return;
 
         if (this.syncMode == 'master')
@@ -199,12 +205,17 @@ class ChannelState
 
     onPause()
     {
-        broadcast({ action: 'pause', channel: this.#channel, currentTime: this.currentTime });
+        broadcast({ 
+            action: 'pause', 
+            channel: this.channel,
+            layer: this.layer, 
+            currentTime: this.currentTime 
+        });
     }
 
     stop()
     {
-        if (!this.#hasTransport)
+        if (!this.hasTransport)
             return;
 
         if (this.syncMode == 'master')
@@ -217,15 +228,14 @@ class ChannelState
     
     onStop()
     {
-        broadcast({ action: 'stop', channel: this.#channel});
+        broadcast({ action: 'stop', channel: this.channel, layer: this.layer});
     }
 
     render()
     {
         return {
-            channel: this.#channel,
-            bank: this.bank,
-            programNumber: this.programNumber,
+            channel: this.channel,
+            layer: this.layer,
             mediaFile: this.#mediaFile,
             mimeType: this.#mimeType,
             currentTime: this.currentTime,
@@ -234,26 +244,89 @@ class ChannelState
     }
 }
 
-// Create channel states
-let initialMediaFile = programList == null ? null : qualifyMediaFile(programList.getMediaFile(0));
-let channelStates = [];
-for (let i=0; i<16; i++)
+class ChannelState
 {
-    // Create default channel state
-    var cs = new ChannelState(i, initialMediaFile);
+    constructor(channel)
+    {
+        this.channel = channel;
+    }
+
+    bank = 0;
+    programNumber = 0;
+    channel;
+    layers = [];
+
+    render()
+    {
+        return {
+            channel: this.channel,
+            bank: this.bank,
+            programNumber: this.programNumber,
+            layers: this.layers.map(x => x.render()),
+        }
+    }
+}
+
+// Create channel states
+let channelStates = [];
+for (let ch=0; ch<16; ch++)
+{
+    // Create channel state
+    var cs = new ChannelState(ch);
 
     // Merge state from config
-    if (typeof(config.channels[i]) === 'object')
+    if (typeof(config.channels[ch]) === 'object')
     {
-        Object.assign(cs, config.channels[i]);
+        let layers = config.channels[ch].layers;
+        if (Array.isArray(layers))
+        {
+            for (let li=0; li<layers.length; li++)
+            {
+                // Create layer state, load config and add to channel state
+                let layer = new LayerState(ch, li);
+
+                // Media file
+                if (layers[li].mediaFile)
+                    layer.mediaFile = qualifyMediaFile(layers[li].mediaFile);
+
+                // Sync mode
+                if (layers[li].syncMode)
+                    layer.syncMode = layers[li].syncMode;
+
+                // Use program list
+                layer.useProgramList = layers[li].useProgramList === true;
+
+                cs.layers.push(layer);
+            }
+        }
+    }
+
+    // If layers not specified in config file, create a default config that shows media
+    // file for specified program.
+    if (cs.layers.length == 0)
+    {
+        // Create a default layer
+        let layer = new LayerState(ch, 0);
+        layer.useProgramList = true;
+        cs.layers.push(layer);
     }
 
     // Add to list
     channelStates.push(cs);
+}
 
-    // Keep a separate list of MTC channels
-    if (cs.syncMode == 'mtc')
-        mtcChannels.push(cs);
+// Callback on all MTC active layers
+function forAllMtcLayers(cb)
+{
+    for (let i=0; i<channelStates.length; i++)
+    {
+        let layers = channelStates[i].layers;
+        for (let j=0; j<layers.length; j++)
+        {
+            if (layers[j].syncMode == 'mtc' && layers[j].hasTransport)
+                cb(layers[j]);
+        }
+    }
 }
 
 // Setup express
@@ -369,8 +442,7 @@ midiInput.on('message', (deltaTime, m) => {
                     // Start playback on all MTC channels
                     if (!mtcWasPlaying)
                     {
-                        for (let cs of mtcChannels)
-                            cs.onPlay();
+                        forAllMtcLayers(x => x.onPlay());
                     }
                     break;
                 }
@@ -388,23 +460,23 @@ midiInput.on('message', (deltaTime, m) => {
                             {
                                 case MidiMmc.Play:
                                     if (deviceId == 0)
-                                        channelStates.forEach(x => x.play());
+                                        channelStates.forEach(x => x.layers.forEach(y => y.play()));
                                     else
-                                        channelStates[deviceId-1].play();
+                                        channelStates[deviceId-1].layers.forEach(y => y.play());
                                     break;
             
                                 case MidiMmc.Pause:
                                     if (deviceId == 0)
-                                        channelStates.forEach(x => x.pause());
+                                        channelStates.forEach(x => x.layers.forEach(y => y.pause()));
                                     else
-                                        channelStates[deviceId-1].pause();
+                                        channelStates[deviceId-1].layers.forEach(y => y.pause());
                                     break;
                     
                                 case MidiMmc.Stop:
                                     if (deviceId == 0)
-                                        channelStates.forEach(x => x.stop());
+                                        channelStates.forEach(x => x.layers.forEach(y => y.stop()));
                                     else
-                                        channelStates[deviceId-1].stop();
+                                        channelStates[deviceId-1].layers.forEach(y => y.stop());
                                     break;
                             }
                         }
@@ -438,8 +510,7 @@ midiInput.on('message', (deltaTime, m) => {
                         logSmpteTime();
                         
                         // Pause all MTC channels
-                        for (let cs of mtcChannels)
-                            cs.onPause();
+                        forAllMtcLayers(x => x.onPause());
                     }
                     break;
                 }
@@ -504,22 +575,32 @@ function OnProgramChange(channel, programNumber, ignoreRedundant)
     }
     mediaFile = qualifyMediaFile(mediaFile);
 
-    // Don't fire if redundant
-    if (ignoreRedundant && channelState.mediaFile == mediaFile)
-        return;
+    for (let li=0; li < channelState.layers.length; li++)
+    {
+        let layerState = channelState.layers[li];
 
-    // Store media file in channel state
-    channelState.mediaFile = mediaFile;
+        // Only if layer uses program list
+        if (!layerState.useProgramList)
+            continue;
 
-    if (cl.verbose)
-        console.log(`loading media file ${mediaFile} on ch ${channel}`);
-
-    // Broadcast load
-    broadcast({
-        action: 'load',
-        channel,
-        channelState: channelState.render(),
-    });
+        // Don't fire if redundant
+        if (ignoreRedundant && layerState.mediaFile == mediaFile)
+            continue;
+        
+        // Store media file in channel state
+        layerState.mediaFile = mediaFile;
+        
+        if (cl.verbose)
+            console.log(`loading media file ${mediaFile} on ch ${channel} layer {li}`);
+        
+        // Broadcast load
+        broadcast({
+            action: 'loadLayer',
+            channel,
+            layer: li,
+            layerState: layerState.render(),
+        });
+    }
 }
 
 // Open MIDI port
@@ -587,21 +668,14 @@ wss.on('connection', function (ws, request) {
         let msg = JSON.parse(data.toString('utf8'));
         switch (msg.action)
         {
-            case 'setChannelMask':
+            case 'setChannel':
                 // Client is asking for the channel states for a set of channels
-                let result = {};
-                for (let i=0; i<16; i++)
-                {
-                    if ((msg.channelMask & (1 << i)) != 0)
-                    {
-                        result[i] = channelStates[i].render();
-                    }
-                }
                 ws.send(JSON.stringify({ 
-                    action: 'channelStates', 
-                    channelStates: result
+                    action: 'loadChannel', 
+                    channel: msg.channel,
+                    channelState: channelStates[msg.channel].render(),
                 }));
-                ws.channelMask = msg.channelMask;
+                ws.channel = msg.channel;
                 break;
         }
     });
@@ -628,18 +702,13 @@ function broadcast(msg)
     if (cl.verbose)
         console.log("WebSocket Broadcast:", msg);
 
-    // Only send to sockets that are interested
-    let channelMask = 0xff;
-    if (msg.channelMask !== undefined)
-        channelMask = msg.channelMask;
-    else if (msg.channel !== undefined)
-        channelMask = 1 << msg.channel;
-
     // Broadcast
     for (let i=0; i<sockets.length; i++)
     {
         let ws = sockets[i];
-        if ((ws.channelMask & channelMask) != 0)
+
+        // Don't broadcast channel specific messages to sockets that aren't interested
+        if (msg.channel === undefined || ws.channel == msg.channel)
         {
             ws.send(msg);
         }
@@ -654,22 +723,29 @@ setInterval(function() {
     for (let i=0; i<sockets.length; i++)
     {
         let ws = sockets[i];
-        let timestamps = {};
-        let any = false;
-        for (let ch = 0; ch < 16; ch++)
+        if (ws.channel === undefined)
+            continue;
+        let timestamps = [];
+        let channel = channelStates[ws.channel];
+        for (let li = 0; li<channel.layers.length; li++)
         {
-            // Is the socket interested in this channel and is the channel playing?
-            if ((ws.channelMask & (1 << ch)) != 0 && channelStates[ch].isPlaying)
+            let layer = channel.layers[li];
+            if (layer.isPlaying && layer.currentTime != null)
             {
-                timestamps[ch] = channelStates[ch].currentTime;
-                any = true;
+                timestamps.push({
+                    channel: channel.channel,
+                    layer: li,
+                    timestamp: layer.currentTime,
+                })
             }
         }
-        if (any)
+        if (timestamps.length > 0)
+        {
             ws.send(JSON.stringify({
                 action: 'sync',
                 timestamps,
             }));
+        }
     }
 }, 1000);
 
@@ -695,6 +771,9 @@ process.on('SIGTERM', gracefulClose);
 // Utility to qualify media file path
 function qualifyMediaFile(mediaFile)
 {
+    if (!mediaFile)
+        return mediaFile;
+
     if (mediaFile.indexOf("://") > 0)
         return mediaFile;
 
