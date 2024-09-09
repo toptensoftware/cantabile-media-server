@@ -54,7 +54,7 @@ To setup the media server:
         "baseDir": ".",
         "midiPort": "loopMIDI Port 1",
         "port": 3000,
-        "programList": "programList.txt"
+        "programList": "programList.txt",
     }
     ```
 
@@ -108,24 +108,6 @@ To setup the media server:
 8. Send MIDI commands to the server to control media file selection and playback.
 
 
-## MIDI Implementation
-
-The server currently supports the following MIDI events:
-
-* Program Bank Selection (CC 0 and CC 32)
-* Program Change Events
-* MMC Sys-ex Message for Play, Pause and Stop
-
-The 16 MIDI channels are supported and each web browser can view a single "channel" (selectable by the drop down 
-on the web page).
-
-On receiving a program change event, the program number will be mapped to a media file as configured 
-in `programList.txt`.  Any currently connected displays will be updated to the newly selected media file.
-
-Send MMC Play, Pause and Stop events to control playback.  The device Id byte of the MMC message controls which
-MIDI channel to play/stop.   0 = all channels. 1 = MIDI Channel 1, 2 = MIDI Channel 2 etc...
-
-
 ## Supported Media Files
 
 All media files must be natively supported by the browser. [See here](https://www.geeksforgeeks.org/html5-video/) for a
@@ -141,6 +123,161 @@ ffmpeg -i input.mpg output.mp4
 ```
 
 
+## Time Synchronisation
+
+`cantabile-media-server` supports three time synchronization modes:
+
+* `none` - each browser's video players maintains its own time which may drift or become very unsynchronized if started at different times
+* `master` - the media server itself becomes the master time sync. source.
+* `mtc` - the media server uses an external (ie: incoming) MIDI Time Code as the master time sync. source.
+
+In `none` and `master` modes, playback is controlled by sending MMC Sys-ex Message for Play, Pause and Stop
+
+In `mtc` modes, playback is started and stopped in response to MTC events received.
+
+In `master` and `mtc` modes, periodic timestamp pings are sent to each connected client and the playback rate of the 
+video players is constantly adjusted to keep the video as in-sync as possible.   If the discrepency between expected
+time and actual time exceeds one second, the video instantly jumps to the expected timestamp and sync. resumes from 
+that point onwards.
+
+The default synchronization mode can be set for all video players in the main config file section, eg:
+
+    ```
+    {
+        "baseDir": ".",
+        "midiPort": "loopMIDI Port 1",
+        "port": 3000,
+        "programList": "programList.txt",
+        "syncMode": "master",
+    }
+    ```
+
+Each layer also has a customizable sync. mode - see Layers.
+
+
+## Latency Compenstation
+
+Each web browser client has a Latency Compenstation setting in the non-full screen Web UI.  When set to a non-zero 
+value the time synchronization code will try to synchronize to a point that far into the future.  
+
+This setting only takes effect when the video is actually playing and ignored when the video is stopped or paused.
+
+
+## Layers
+
+By default each channel supports a single "layer" of content.  For more complex setups you might like to create a
+multi-layer configuration where multiple video/image layers are placed over each other and can be shown/hidden for
+fast switching between different videos, images and camera feeds.
+
+To set the layers for a channel, create a config file with "channels" and  "layers" sections like so:
+
+```
+{
+    "baseDir": ".",
+    "midiPort": "loopMIDI Port 1",
+    "port": 3000,
+    "programList": "programList.txt",
+    "syncMode": "mtc",
+    "channels": {
+        "1": {
+            "layers": [
+                { 
+                    "mediaFile": "band_logo.jpg" 
+                },
+                { 
+                    "useProgramList": true,
+                    "hiddenWhenStopped": true,
+                },
+                { 
+                    "mediaFile": "webrtc+http://localhost:8889/mystream/whep",
+                    "display": "hidden"
+                }
+            ]
+        }
+    }
+}
+```
+
+The above example includes three layers:
+
+* A background layer with a static image of the band logo
+* A middle layer that shows the media file selected from the program list
+* A top layer that's hidden by default but shows the real-time feed from a camera when shown
+
+In this setup:
+
+* By default, the band logo will be displayed
+* If a program change causes a media file to be loaded for this channel, it will appear in place of the band logo
+* MIDI commands can be used to arbitrarily unhide the camera feed.
+
+Each layer supports the following settings:
+
+* `mediaFile` - a media file to always show in this layer
+* `display` - either 'visible' (the default if not specified), 'hidden' or 'inactive'
+* `syncMode` - either 'none', 'master' or 'mtc' to set the sync mode for video's displayed in this layer.
+* `useProgramList` - whether to load media from the program list (using the channel's selected program number)
+* `programSlot` - which program number slot to use (see Program Slots below)
+* `programNumberOffset` - an offset to add to the channel's selected program number when loading media
+* `hiddenWhenStopped` - if true, automatically hides the layer when the video is stopped (shown when playing or paused)
+
+
+## Program Slots
+
+Normally MIDI only supports a single program number selection per MIDI channel.  Since `cantabile-media-server` supports
+multiple display layers, sometimes you might want to select different media files on different layers.
+
+To support this, each MIDI channel has 4 "program number slots".
+
+* Program number slot 0 is the primary program number and is loaded by sending MIDI Program change events.
+* MIDI CC's 70 - 73 are used to select program numbers for slots 0 to 3
+
+(ie: program change and CC 70 are equivalent).
+
+Note: all 4 program slots will use the standard MIDI program bank (MIDI CC's 0 and 32) at the time the program is loaded.
+
+To have a layer use an alternative program number slot set the layer's `programSlot` setting (see above).
+
+
+
+## Controlling Layer Visibility
+
+Each layer has a visibility setting:
+
+* `visible` - layer is active and shown (unless obscured by a higher level layer)
+* `hidden` - layer is active (ie: loaded and maybe playing), but hidden allowing the next lower visible layer to be seen.
+* `inactive` - layer is deactivated and hidden.
+
+The visibility of a layer can be set in the config file, but can be changed on the fly using MIDI CCs 80 (layer 0) thru 
+89 (layer 9) and sending the following values:
+
+* 0 = inactive
+* 1 = hidden
+* any other value = visible
+
+
+
+## MIDI Implementation
+
+The server currently supports the following MIDI events:
+
+* Program Bank Selection (CC 0 and CC 32)
+* Program Change Events
+* MMC Sys-ex Message for Play, Pause and Stop
+* MIDI Time Code (MTC) to control playback and sync. video's configured with sync. mode 'mtc'
+* CC 70 - 73 - program bank selection for alternate program slots 0 - 3
+* CC 80 - 89 - controls visibility of layers 0 - 9.
+
+The 16 MIDI channels are supported and each web browser can view a single "channel" (selectable by the drop down 
+on the web page).
+
+On receiving a program change event, the program number will be mapped to a media file as configured 
+in `programList.txt`.  Any currently connected displays will be updated to the newly selected media file.
+
+Send MMC Play, Pause and Stop events to control playback.  The device Id byte of the MMC message controls which
+MIDI channel to play/stop.   0 = all channels. 1 = MIDI Channel 1, 2 = MIDI Channel 2 etc...
+
+
+
 ## Running Across Multiple Machines
 
 The server can be configured to run across multiple machines:
@@ -150,6 +287,7 @@ The server can be configured to run across multiple machines:
   setting in `config.json`.  This can be used to create a separate media only server from which to 
   source media files.
 * The program list can reference non-locally served files by prefixing the media file with `http://`
+
 
 
 ## Camera/Real-time Feeds

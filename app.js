@@ -78,7 +78,8 @@ if (config.programList !== undefined)
                 programList = newProgramList;
                 for (let i=0; i<16; i++)
                 {
-                    OnProgramChange(i, channelStates[i].programNumber, true);
+                    for (let j=0; j<4; j++)
+                        OnProgramChange(i, j, channelStates[i].programNumberSlots[j], true);
                 }
                 if (cl.verbose)
                     console.log("Program list re-loaded");
@@ -93,20 +94,22 @@ if (config.programList !== undefined)
 
 class LayerState
 {
-    constructor(channel, layer)
+    constructor(channelIndex, layerIndex)
     {
-        this.channel = channel;
-        this.layer = layer;
+        this.channelIndex = channelIndex;
+        this.layerIndex = layerIndex;
         this.syncMode = config.syncMode ?? "master";
     }
 
-    channel = 0;
-    layer = 0;
+    channelIndex = 0;
+    layerIndex = 0;
+    display = "visible";         // visible, hidden or inactive
     #baseTime = 0;
     #startPlayTime = null;
     #mediaFile = null;
     #mimeType = null;
     hasTransport = false;
+    programNumberOffset = 0;
 
 
     get mediaFile() 
@@ -181,8 +184,8 @@ class LayerState
     {
         broadcast({ 
             action: 'play', 
-            channel: this.channel, 
-            layer: this.layer,
+            channelIndex: this.channelIndex, 
+            layerIndex: this.layerIndex,
             currentTime: this.currentTime 
         });
     }
@@ -207,8 +210,8 @@ class LayerState
     {
         broadcast({ 
             action: 'pause', 
-            channel: this.channel,
-            layer: this.layer, 
+            channelIndex: this.channelIndex,
+            layerIndex: this.layerIndex, 
             currentTime: this.currentTime 
         });
     }
@@ -228,40 +231,40 @@ class LayerState
     
     onStop()
     {
-        broadcast({ action: 'stop', channel: this.channel, layer: this.layer});
+        broadcast({ action: 'stop', channelIndex: this.channelIndex, layerIndex: this.layerIndex});
     }
 
     render()
     {
         return {
-            channel: this.channel,
-            layer: this.layer,
+            channelIndex: this.channelIndex,
+            layerIndex: this.layerIndex,
+            display: this.display,
             mediaFile: this.#mediaFile,
             mimeType: this.#mimeType,
             currentTime: this.currentTime,
             isPlaying: this.isPlaying,
+            hiddenWhenStopped : this.hiddenWhenStepped,
         }
     }
 }
 
 class ChannelState
 {
-    constructor(channel)
+    constructor(channelIndex)
     {
-        this.channel = channel;
+        this.channelIndex = channelIndex;
     }
 
     bank = 0;
-    programNumber = 0;
-    channel;
+    programNumberSlots = [ 0, 0, 0, 0 ];
+    channelIndex;
     layers = [];
 
     render()
     {
         return {
-            channel: this.channel,
-            bank: this.bank,
-            programNumber: this.programNumber,
+            channelIndex: this.channelIndex,
             layers: this.layers.map(x => x.render()),
         }
     }
@@ -275,7 +278,7 @@ for (let ch=0; ch<16; ch++)
     var cs = new ChannelState(ch);
 
     // Merge state from config
-    if (typeof(config.channels[ch]) === 'object')
+    if (config.channels && typeof(config.channels[ch+1]) === 'object')
     {
         let layers = config.channels[ch].layers;
         if (Array.isArray(layers))
@@ -283,20 +286,18 @@ for (let ch=0; ch<16; ch++)
             for (let li=0; li<layers.length; li++)
             {
                 // Create layer state, load config and add to channel state
-                let layer = new LayerState(ch, li);
+                let layerState = new LayerState(ch, li);
 
-                // Media file
-                if (layers[li].mediaFile)
-                    layer.mediaFile = qualifyMediaFile(layers[li].mediaFile);
+                // Copy layer state from config
+                layerState.mediaFile = qualifyMediaFile(layers[li].mediaFile);
+                layerState.syncMode = layers[li.syncMode] ?? layerState.syncMode;
+                layerState.useProgramList = layers[li].useProgramList === true;
+                layerState.programSlot = layers[li].programSlot ?? 0;
+                layerState.hiddenWhenStepped = layers[li].hiddenWhenStopped ?? false;
+                layerState.programNumberOffset = layers[li].programNumberOffset ?? 0;
+                layerState.display = layers[li].display ?? "visible";
 
-                // Sync mode
-                if (layers[li].syncMode)
-                    layer.syncMode = layers[li].syncMode;
-
-                // Use program list
-                layer.useProgramList = layers[li].useProgramList === true;
-
-                cs.layers.push(layer);
+                cs.layers.push(layerState);
             }
         }
     }
@@ -306,9 +307,10 @@ for (let ch=0; ch<16; ch++)
     if (cs.layers.length == 0)
     {
         // Create a default layer
-        let layer = new LayerState(ch, 0);
-        layer.useProgramList = true;
-        cs.layers.push(layer);
+        let layerState = new LayerState(ch, 0);
+        layerState.useProgramList = true;
+        layerState.programSlot = 0;
+        cs.layers.push(layerState);
     }
 
     // Add to list
@@ -519,12 +521,12 @@ midiInput.on('message', (deltaTime, m) => {
         }
 
         // Channel messages
-        let channel = m[0] & 0x0F;
+        let channelIndex = m[0] & 0x0F;
         switch (m[0] & 0xF0)
         {
             case MidiMessage.ControlChange:
             {
-                let channelState = channelStates[channel];
+                let channelState = channelStates[channelIndex];
                 switch (m[1])
                 {
                     case MidiController.BankSelectMsb:
@@ -534,13 +536,52 @@ midiInput.on('message', (deltaTime, m) => {
                     case MidiController.BankSelectLsb:
                         channelState.bank = (channelState.bank & (0x7f << 7)) | (m[2] & 0x7F)
                         break;
+
+                }
+                
+                // Layer visibility control
+                if (m[1] >= 80 && m[1] <= 89)
+                {
+                    let layerIndex = m[1] - 80;
+                    if (layerIndex < channelState.layers.length)
+                    {
+                        let newDisplay = "visible";
+                        switch (m[2])
+                        {
+                            case 0:
+                                newDisplay = "inactive";
+                                break;
+
+                            case 1:
+                                newDisplay = "hidden";
+                                break;
+                        }
+                        if (channelState.layers[layerIndex].display != newDisplay)
+                        {
+                            channelState.layers[layerIndex].display = newDisplay;
+
+                            // Broadcast
+                            broadcast({
+                                action: 'show',
+                                channelIndex: channelIndex,
+                                layerIndex: layerIndex,
+                                display: newDisplay,
+                            });                            
+                        }
+                    }
+                }
+
+                // Alternate program slots
+                if (m[1] >= 70 && m[1] <= 73)
+                {
+                    OnProgramChange(channelIndex, m[1] - 70, m[2]);
                 }
                 break;
             }
 
             case MidiMessage.ProgramChange:
             {
-                OnProgramChange(channel, m[1]);
+                OnProgramChange(channelIndex, 0, m[1]);
                 break;
             }
        }
@@ -552,7 +593,7 @@ midiInput.on('message', (deltaTime, m) => {
 
 });
 
-function OnProgramChange(channel, programNumber, ignoreRedundant)
+function OnProgramChange(channelIndex, slot, programNumber, ignoreRedundant)
 {
     // Must have a program list
     if (!programList)
@@ -562,26 +603,20 @@ function OnProgramChange(channel, programNumber, ignoreRedundant)
     }
 
 
-    let channelState = channelStates[channel];
-    channelState.programNumber = programNumber;
+    let channelState = channelStates[channelIndex];
     programNumber = (channelState.bank << 7) | programNumber;
+    channelState.programNumberSlots[slot] = programNumber;
 
-    // Get the media file, quit if none
-    let mediaFile = programList.getMediaFile(programNumber);
-    if (!mediaFile)
+    for (let layerIndex=0; layerIndex < channelState.layers.length; layerIndex++)
     {
-        console.log(`no media file selected for program number ${programNumber}`);
-        return;
-    }
-    mediaFile = qualifyMediaFile(mediaFile);
+        let layerState = channelState.layers[layerIndex];
 
-    for (let li=0; li < channelState.layers.length; li++)
-    {
-        let layerState = channelState.layers[li];
-
-        // Only if layer uses program list
-        if (!layerState.useProgramList)
+        // Only if layer uses program list and correct program slot
+        if (!layerState.useProgramList || layerState.programSlot != slot)
             continue;
+
+        // Work out  media file, quit if none
+        let mediaFile = qualifyMediaFile(programList.getMediaFile(programNumber + layerState.programNumberOffset));
 
         // Don't fire if redundant
         if (ignoreRedundant && layerState.mediaFile == mediaFile)
@@ -591,13 +626,13 @@ function OnProgramChange(channel, programNumber, ignoreRedundant)
         layerState.mediaFile = mediaFile;
         
         if (cl.verbose)
-            console.log(`loading media file ${mediaFile} on ch ${channel} layer {li}`);
+            console.log(`loading media file ${mediaFile} on ch ${channelIndex} layer ${layerIndex}`);
         
         // Broadcast load
         broadcast({
             action: 'loadLayer',
-            channel,
-            layer: li,
+            channelIndex: channelIndex,
+            layerIndex: layerIndex,
             layerState: layerState.render(),
         });
     }
@@ -672,10 +707,10 @@ wss.on('connection', function (ws, request) {
                 // Client is asking for the channel states for a set of channels
                 ws.send(JSON.stringify({ 
                     action: 'loadChannel', 
-                    channel: msg.channel,
-                    channelState: channelStates[msg.channel].render(),
+                    channelIndex: msg.channelIndex,
+                    channelState: channelStates[msg.channelIndex].render(),
                 }));
-                ws.channel = msg.channel;
+                ws.channelIndex = msg.channelIndex;
                 break;
         }
     });
@@ -708,7 +743,7 @@ function broadcast(msg)
         let ws = sockets[i];
 
         // Don't broadcast channel specific messages to sockets that aren't interested
-        if (msg.channel === undefined || ws.channel == msg.channel)
+        if (msg.channelIndex === undefined || ws.channelIndex == msg.channelIndex)
         {
             ws.send(msg);
         }
@@ -723,19 +758,19 @@ setInterval(function() {
     for (let i=0; i<sockets.length; i++)
     {
         let ws = sockets[i];
-        if (ws.channel === undefined)
+        if (ws.channelIndex === undefined)
             continue;
         let timestamps = [];
-        let channel = channelStates[ws.channel];
-        for (let li = 0; li<channel.layers.length; li++)
+        let channelState = channelStates[ws.channelIndex];
+        for (let layerIndex = 0; layerIndex<channelState.layers.length; layerIndex++)
         {
-            let layer = channel.layers[li];
-            if (layer.isPlaying && layer.currentTime != null)
+            let layerState = channelState.layers[layerIndex];
+            if (layerState.isPlaying && layerState.currentTime != null)
             {
                 timestamps.push({
-                    channel: channel.channel,
-                    layer: li,
-                    timestamp: layer.currentTime,
+                    channelIndex: channelState.channelIndex,
+                    layerIndex: layerIndex,
+                    timestamp: layerState.currentTime,
                 })
             }
         }

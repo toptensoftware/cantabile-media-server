@@ -81,15 +81,15 @@ import { WHEPClient } from "/whip-whep/whep.js";
 // In edge/chrome -> settings -> media autoplay -> allow -> add site, or turn off limiting globally.
 
 // State
-let layerControllers = [];
-let activeChannel = -1;
-let channelState = null;
-let socketOpen = false;
+let g_layerControllers = [];
+let g_activeChannelIndex = -1;
+let g_channelState = null;
+let g_ = false;
 
 // Get element
-let selChannel = document.getElementById("channel");
-let latcomp = document.getElementById("latcomp");
-let elRate = document.getElementById("rate");
+let g_selChannel = document.getElementById("channel");
+let g_latcomp = document.getElementById("latcomp");
+let g_elRate = document.getElementById("rate");
 
 // Full-screen button handler
 document.getElementById("btnFullScreen").onclick = (event) => {
@@ -106,20 +106,20 @@ else
     loadChannel();
 }
 window.addEventListener("hashchange", hashChanged);
-selChannel.onchange = () => {
+g_selChannel.onchange = () => {
     updateHash();
     loadChannel();
 }
 
-latcomp.oninput = updateHash;
+g_latcomp.oninput = updateHash;
 
 function updateHash()
 {
     let parts = [];
-    if (selChannel.value != 0)
-        parts.push(`ch=${parseInt(selChannel.value) + 1}`);
-    if (latcomp.value != 0)
-        parts.push(`latcomp=${latcomp.value}`);
+    if (g_selChannel.value != 0)
+        parts.push(`ch=${parseInt(g_selChannel.value) + 1}`);
+    if (g_latcomp.value != 0)
+        parts.push(`latcomp=${g_latcomp.value}`);
 
     if (parts.length == 0)
         document.location.hash = "";
@@ -132,11 +132,11 @@ function hashChanged()
     var state = new URLSearchParams('?' + document.location.hash.substring(1));
     if (state.get("ch"))
     {
-        selChannel.value = parseInt(state.get("ch") - 1);
+        g_selChannel.value = parseInt(state.get("ch") - 1);
     }
     if (state.get("latcomp"))
     {
-        latcomp.value = parseInt(state.get("latcomp"));
+        g_latcomp.value = parseInt(state.get("latcomp"));
     }
     loadChannel();
 }
@@ -147,42 +147,42 @@ function hashChanged()
 async function loadChannel()
 {
     // Quit if socket not yet open
-    if (!socketOpen)
+    if (!g_)
         return;
 
     // Get currently selected channel
-    let channel = parseInt(selChannel.value);
-    if (channel == activeChannel || channel < 0 || channel > 15)
+    let channelIndex = parseInt(g_selChannel.value);
+    if (channelIndex == g_activeChannelIndex || channelIndex < 0 || channelIndex > 15)
         return;
 
     // Store active channel (to prevent duplicate requests)
-    activeChannel = channel;
+    g_activeChannelIndex = channelIndex;
 
     // Clear channel state until retrieved
-    channelState = null;
+    g_channelState = null;
 
     // Send command requesting state of active channel
     ws.send(JSON.stringify({ 
         action: "setChannel", 
-        channel: activeChannel
+        channelIndex: g_activeChannelIndex
     }));
 }
 
 function onLoadChannel(cs)
 {
     // Store new channel state
-    channelState = cs;
+    g_channelState = cs;
 
     // Close old layer controllers
-    layerControllers.forEach(x => x.close());
-    layerControllers = [];
+    g_layerControllers.forEach(x => x.close());
+    g_layerControllers = [];
 
-    if (channelState != null)
+    if (g_channelState != null)
     {
         // Allocate array to hold layer controllers
         for (let i=0; i<cs.layers.length; i++)
         {
-            layerControllers.push(null);
+            g_layerControllers.push(null);
             onLoadLayer(i, cs.layers[i]);
         }
     }
@@ -190,9 +190,12 @@ function onLoadChannel(cs)
 
 function onLoadLayer(index, ls)
 {
+    // Store new layer state
+    g_channelState.layers[index] = ls;
+
     // Create new media controller
     let layerController;
-    if (ls.mediaFile)
+    if (ls.mediaFile && ls.display != "inactive")
     {
         if (ls.mediaFile?.startsWith("webrtc+"))
         {
@@ -219,10 +222,10 @@ function onLoadLayer(index, ls)
     }
 
     // Replace or append
-    if (layerControllers[index])
+    if (g_layerControllers[index])
     {
-        layerControllers[index].element.replaceWith(layerController.element);
-        layerControllers[index].close();
+        g_layerControllers[index].element.replaceWith(layerController.element);
+        g_layerControllers[index].close();
     }
     else
     {
@@ -230,18 +233,47 @@ function onLoadLayer(index, ls)
     }
 
     // Store new media controller
-    layerControllers[index] = layerController;
+    g_layerControllers[index] = layerController;
+
+    // Start playback
+    if (ls.isPlaying)
+        layerController.play?.();
+}
+
+function onShowLayer(layerIndex, display)
+{
+    // Check range
+    if (layerIndex < 0 || layerIndex > g_channelState.layers.length)
+        return;
+
+    // Get current layer state, quit if redundant
+    let ls = g_channelState.layers[layerIndex];
+    if (ls.display == display)
+        return;
+
+    
+    // Create or destroy layer?
+    if (ls.display == 'inactive' || display == "inactive")
+    {
+        ls.display = display;
+        onLoadLayer(layerIndex, ls);
+        return;
+    }
+
+    // Store new display
+    ls.display = display;
+    g_layerControllers[layerIndex].show(display);
 }
 
 // WebSocket handler
 let ws = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "/ws");
 ws.onopen = (event) => {
-    socketOpen = true;
+    g_ = true;
     loadChannel();
 };
 ws.onclose = (event) => {
     onLoadChannel(null);
-    socketOpen = false;
+    g_ = false;
 };
 ws.onmessage = (event) => {
     var msg = JSON.parse(event.data);
@@ -251,9 +283,9 @@ ws.onmessage = (event) => {
         case 'sync':
             for (let ts of msg.timestamps)
             {
-                if (ts.channel == activeChannel)
+                if (ts.channelIndex == g_activeChannelIndex)
                 {
-                    layerControllers[ts.layer].sync?.(ts.timestamp);
+                    g_layerControllers[ts.layerIndex].sync?.(ts.timestamp);
                 }
             }
             break;
@@ -265,71 +297,84 @@ ws.onmessage = (event) => {
 
 
     // Check message is for correct channel (or -1 for "all channels")
-    if (channelState == null || (msg.channel != activeChannel && msg.channel != -1))
+    if (g_channelState == null || (msg.channelIndex != g_activeChannelIndex && msg.channelIndex != -1))
         return;
 
     switch (msg.action)
     {
         case 'play':
-            layerControllers[msg.layer].play?.();
+            g_layerControllers[msg.layerIndex].play?.();
+            g_layerControllers[msg.layerIndex].isPlaying = true;
             break;
 
         case 'pause':
-            layerControllers[msg.layer].pause?.(msg.currentTime);
+            g_layerControllers[msg.layerIndex].pause?.(msg.currentTime);
+            g_layerControllers[msg.layerIndex].isPlaying = false;
             break;
 
         case 'stop':
-            layerControllers[msg.layer].stop?.();
+            g_layerControllers[msg.layerIndex].stop?.();
+            g_layerControllers[msg.layerIndex].isPlaying = false;
             break;
 
         case 'loadLayer':
-            onLoadLayer(msg.layer, msg.layerState);
+            onLoadLayer(msg.layerIndex, msg.layerState);
+            break;
+
+        case 'show':
+            onShowLayer(msg.layerIndex, msg.display);
             break;
     }
 };
 
-function nullLayerController(index)
+function nullLayerController(layerIndex)
 {
-    let element = document.createComment(`null layer (${index})`);
+    let element = document.createComment(`layer #${layerIndex} placeholder`);
     return {
         close: () => element.remove(),
         element, 
     }
 }
 
-function imageLayerController(layer)
+function imageLayerController(layerState)
 {
     let element = document.createElement("img");
     element.classList.add("mediaElement");
-    element.setAttribute('src', layer.mediaFile);
+    element.setAttribute('src', layerState.mediaFile);
+    element.style.display = layerState.display == 'hidden' ? 'none' : "";
+
 
     return {
         close: () => element.remove(),
+        show: (display) => element.style.display = display == 'hidden' ? 'none' : "",
         element, 
     }
 }
 
-function videoLayerController(layer)
+function videoLayerController(layerState)
 {
 
     let element = document.createElement("video");
     element.classList.add("mediaElement");
-    element.setAttribute('src', layer.mediaFile);
+    element.setAttribute('src', layerState.mediaFile);
     element.muted = true;
-    element.currentTime = layer.currentTime;
-//    element.playbackRate = 2;
+    element.currentTime = layerState.currentTime;
+    element.style.display = layerState.display == 'hidden' ? 'none' : "";
 
     let playStartBaseTime = null;
     let playStartVideoTime = null;
     let currentLatComp = 0;
 
+    show();
+
     function play()
     {
-        currentLatComp = latcomp.value / 1000.0;
+        currentLatComp = g_latcomp.value / 1000.0;
         element.currentTime += currentLatComp;
         playStartBaseTime = Date.now();
         playStartVideoTime = element.currentTime;
         element.play();
+        show();
     }
 
     function pause(timestamp)
@@ -338,7 +383,8 @@ function videoLayerController(layer)
         playStartVideoTime = null;
         element.pause(); 
         element.currentTime = timestamp;
-        elRate.innerText = "";
+        g_elRate.innerText = "";
+        show();
     }
 
     function stop()
@@ -394,7 +440,16 @@ function videoLayerController(layer)
             playStartVideoTime = timestamp;
         }
 
-        elRate.innerText = `Rate: x${element.playbackRate.toFixed(3)}`;
+        g_elRate.innerText = `Rate: x${element.playbackRate.toFixed(3)}`;
+    }
+
+    function show()
+    {
+        let visible = layerState.display != "hidden";
+        if (layerState.hiddenWhenStopped && element.paused && element.currentTime == 0)
+            visible = false;
+
+        element.style.display = visible ? "" : "none";
     }
 
     return {
@@ -403,18 +458,20 @@ function videoLayerController(layer)
         pause,
         stop,
         sync,
+        show,
         element, 
     }
 }
 
-function webrtcLayerController(layer)
+function webrtcLayerController(layerState)
 {
-    let whep_url = layer.mediaFile.substring("webrtc+".length);
+    let whep_url = layerState.mediaFile.substring("webrtc+".length);
 
     // Create element
     let element = document.createElement("video");
     element.classList.add("mediaElement");
     element.muted = true;
+    element.style.display = layerState.display == 'hidden' ? 'none' : "";
 
     // Setup RTC connection
     const pc = window.pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
@@ -439,6 +496,7 @@ function webrtcLayerController(layer)
             whep.stop();
             element.remove();
         },
+        show: (display) => element.style.display = display == 'hidden' ? 'none' : "",
         element,
     }
 }
