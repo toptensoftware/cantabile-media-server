@@ -754,7 +754,7 @@ function broadcast(msg)
 // MTC and Master mode video sync broadcast
 // Every 1 second, broadcast a sync event to all playing
 // media streams reporting the current play position
-setInterval(function() {
+let syncTimer = setInterval(function() {
     for (let i=0; i<sockets.length; i++)
     {
         let ws = sockets[i];
@@ -789,6 +789,8 @@ setInterval(function() {
 function gracefulClose(signal) {
     if (cl.verbose)
         console.log(`Received ${signal}`);
+
+    clearInterval(syncTimer);
 
     midiInput.closePort();
     for (let i=0; i<sockets.length; i++)
