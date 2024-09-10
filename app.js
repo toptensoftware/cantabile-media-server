@@ -280,7 +280,7 @@ for (let ch=0; ch<16; ch++)
     // Merge state from config
     if (config.channels && typeof(config.channels[ch+1]) === 'object')
     {
-        let layers = config.channels[ch].layers;
+        let layers = config.channels[ch + 1].layers;
         if (Array.isArray(layers))
         {
             for (let li=0; li<layers.length; li++)
