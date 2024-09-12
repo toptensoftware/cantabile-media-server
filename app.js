@@ -49,13 +49,16 @@ if (cl.kill)
     {
         var child = child_process.spawnSync(
             "wmic.exe", 
-            [ "process",  "where", "name like '%%node%%' and commandline like '%%cantabile-media-server%%'", "get", "processid"],
+            [ "process",  "where", "name like '%%node%%' and commandline like '%%cantabile-media-server%%' and commandline not like '%%--kill%%'", "get", "processid"],
             { encoding : 'utf8' });
         
         for (let pid of child.stdout.split('\n').map(x => parseInt(x)).filter(x => !isNaN(x)))
         {
-            console.log(`Killing ${pid}`);
-            process.kill(pid);
+            if (pid != process.pid)
+            {
+                console.log(`Killing ${pid}`);
+                process.kill(pid);
+            }
         }
     }
     else
