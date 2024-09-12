@@ -233,10 +233,16 @@ To support this, each MIDI channel has 4 "program number slots".
 
 (ie: program change and CC 70 are equivalent).
 
-Note: all 4 program slots will use the standard MIDI program bank (MIDI CC's 0 and 32) at the time the program is loaded.
+Notes: 
 
-To have a layer use an alternative program number slot set the layer's `programSlot` setting (see above).
-
+* all 4 program slots will use the standard MIDI program bank (MIDI CC's 0 and 32) at the time the program is loaded.  
+    ie: to set a banked program number to a program slot first send the bank MSB/LSB then
+send CC 70-73.
+* CC's 70-73 refer to program slots 0-3  (not to layers 0-3). To have a layer use an alternative program number slot set the layer's `programSlot` setting (see above).
+* when specifying program numbers using CCs 70-73 remember that the sent values must be zero based.
+    ie: the first program is 0.  
+    In contrast, many MIDI programs display program numbers as one-based so  the first program number
+    is 1 (event though it's transmitted as value 0).  This means in the sending program, you may need to use one-based for program changes, and zero based for CC 70-73.
 
 
 ## Controlling Layer Visibility
