@@ -22,6 +22,7 @@ function showHelp()
     console.log("   --list-midi-devices      Shows a list of available midi devices");
     console.log("   --watch                  Watch and automatically reload program list file when changed");
     console.log("   --verbose                Shows more logging");
+    console.log("   --kill                   Kill all running instances of the media server (Windows only)");
     console.log("   --help                   Shows this help");
     console.log("   --version                Shows version info");
 }
@@ -30,6 +31,7 @@ export function parseCommandLine(args)
 {
     var options = {
         verbose: false,
+        kill: false,
         listMidiDevices: false,
     }
     
@@ -52,6 +54,10 @@ export function parseCommandLine(args)
                     
                 case "verbose":
                     options.verbose = true;
+                    break;
+
+                case "kill":
+                    options.kill = true;
                     break;
     
                 case "help":

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
 import http from 'node:http';
+import child_process from 'node:child_process';
+import os from 'node:os';
 import express from 'express';
 import session from 'express-session';
 import midi from '@julusian/midi';
@@ -28,8 +30,6 @@ catch (err)
     process.exit(7);
 }
 
-showVersion();
-
 // List available midi devices?
 if (cl.listMidiDevices)
 {
@@ -43,6 +43,29 @@ if (cl.listMidiDevices)
     process.exit(0);
 }
 
+if (cl.kill)
+{
+    if (os.platform == 'win32')
+    {
+        var child = child_process.spawnSync(
+            "wmic.exe", 
+            [ "process",  "where", "name like '%%node%%' and commandline like '%%cantabile-media-server%%'", "get", "processid"],
+            { encoding : 'utf8' });
+        
+        for (let pid of child.stdout.split('\n').map(x => parseInt(x)).filter(x => !isNaN(x)))
+        {
+            console.log(`Killing ${pid}`);
+            process.kill(pid);
+        }
+    }
+    else
+    {
+        console.error("--kill is only supported on Windows");
+    }
+    process.exit(0);
+}
+
+showVersion();
 
 
 // App State
