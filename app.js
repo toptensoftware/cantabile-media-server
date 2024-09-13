@@ -16,6 +16,7 @@ import { ProgramList } from './programList.js';
 import { MidiMessage, MidiController, MidiMmc } from './midiTypes.js';
 import { mimeTypeFromFile } from './mimeTypes.js';
 import { formatSmpte, qframesToSmpte, smpteToQFrames, qframesToSeconds } from './smpte.js';
+import { pdfMiddleware} from "./pdf.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -400,6 +401,8 @@ app.get('/media/:file(*)', (req, res, next) => {
     }) 
     stream.pipe(res) 
 });
+
+app.use("/media", pdfMiddleware(config.baseDir));
 
 // Static handler for non-streamed media files
 app.use("/media", express.static(config.baseDir));
