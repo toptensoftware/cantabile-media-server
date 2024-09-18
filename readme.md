@@ -1,13 +1,31 @@
 # Cantabile Media Server
 
-Cantabile Media Server is an experimental solution for MIDI controlled video and static image playback.
+Cantabile Media Server is MIDI controllable video playback, static image display and PDF viewer.
+
 It's designed as an accompanying program for [Cantabile Live Performer Music Software](https://www.cantabilesoftware.com)
 but should work with any MIDI Compatible software capable of sending MIDI events.
+
+
+## Features
+
+* Supports static images, videos, camera feeds and PDF documents
+* Use MIDI to switch between images, videos, documents
+* Use MIDI to start/stop video playback
+* Use MIDI to scroll PDF documents
+* Media content is displayed in a web browser allowing multiple remote displays across network
+* Video playback is kept in sync across multiple remote clients
+* MIDI Time Code (MTC) can be used to keep videos in sync. with an external time clock
+* Supports 16 MIDI channels, each displaying different content (eg: video for audience, different PDF docs for band members)
+* Real-time Camera feeds from WHEP compatible server
+* Multiple layer support for overlaying different media content for fast switching by hiding/showing layers.
+
 
 ## Pre-requisites
 
 This project assumes the user is reasonably technically competant, in particular with working with the system
 command line and editing text files.
+
+
 
 ## Installation
 
