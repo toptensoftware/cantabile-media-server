@@ -8,6 +8,7 @@ import child_process from 'node:child_process';
 import os from 'node:os';
 import express from 'express';
 import session from 'express-session';
+import 'express-async-errors';
 import midi from '@julusian/midi';
 import JSON5 from 'json5';
 import { WebSocketServer } from 'ws';
@@ -16,7 +17,7 @@ import { ProgramList } from './programList.js';
 import { MidiMessage, MidiController, MidiMmc } from './midiTypes.js';
 import { mimeTypeFromFile } from './mimeTypes.js';
 import { formatSmpte, qframesToSmpte, smpteToQFrames, qframesToSeconds } from './smpte.js';
-import { pdfMiddleware} from "./pdf.js";
+import { pdfInit, pdfMiddleware} from "./pdf.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -87,7 +88,10 @@ let mtcPieces = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
 // Load config
 let config = JSON5.parse(fs.readFileSync("config.json", "utf8"));
 if (cl.verbose)
-    console.log(config);
+    console.log(JSON.stringify(config, null, 4));
+
+// Initialize pdf processing
+pdfInit(config);
 
 // Load program list
 if (config.programList !== undefined)
@@ -413,6 +417,21 @@ let midiInput = new midi.Input();
 // Don't ignore sys-ex
 midiInput.ignoreTypes(false, false, true);
 
+let view_commands = [
+    null,
+    "lineUp",
+    "lineDown",
+    "halfPageUp",
+    "halfPageDown",
+    "pageUp",
+    "pageDown",
+    "home",
+    "end",
+    "prevMarker",
+    "nextMarker"
+];
+let jump_fraction = 0.0;
+
 // MIDI message handler
 midiInput.on('message', (deltaTime, m) => {
 
@@ -566,6 +585,44 @@ midiInput.on('message', (deltaTime, m) => {
                         channelState.bank = (channelState.bank & (0x7f << 7)) | (m[2] & 0x7F)
                         break;
 
+                    case 90:
+                        // Jump to marker (or PDF page number)
+                        broadcast({
+                            action: 'command',
+                            channelIndex: channelIndex,
+                            command: "jumpToMarker",
+                            param: m[2] + jump_fraction,
+                        });
+                    break;
+
+                    case 91:
+                        // Jump to position (0 - 127) mapped to (0 - 100%)
+                        broadcast({
+                            action: 'command',
+                            channelIndex: channelIndex,
+                            command: "jumpToPosition",
+                            param: m[2] / 127.0 + jump_fraction / 127.0,         // 0.0 -> 1.0
+                        });
+                        break;
+
+                    case 92:
+                        // Jump fraction (fraction position 0-127 mapped to 0.0 to 1.0)
+                        // and used for both jump to position and jump to marker
+                        // Cleared once used.
+                        jump_fraction = m[2] / 127.0;
+                        break;
+
+                    case 93:
+                        // Scroll command
+                        if (m[2] > 0 && m[2] < view_commands.length)
+                        {
+                            broadcast({
+                                action: 'command',
+                                channelIndex: channelIndex,
+                                command: view_commands[m[2]],
+                            });
+                        }
+                        break;
                 }
                 
                 // Layer visibility control

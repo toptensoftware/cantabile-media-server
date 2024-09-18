@@ -10,13 +10,14 @@
 body
 {
     margin: 0;
+    overflow: hidden;
 }
 
 #mediaContainer
 {
     position: relative;
-    width: 640px; 
-    height: 480px;
+    width: 100%; 
+    height: calc(100% - 2rem);
 }
 
 .mediaElement
@@ -34,17 +35,37 @@ img.mediaElement
     object-fit: contain;
 }
 
+div.pdfViewer
+{
+    overflow-y: scroll;
+    position: relative;
+}
+
+div.pdfViewer img
+{
+    display: block;
+    margin: 10px auto;
+    max-width: 100%;
+    max-height: 100%;
+}
+
 #latcomp
 {
     width: 60px;
 }
 
+#controls
+{
+    box-sizing: border-box;
+    padding: 0.5rem;
+    width: 100%;
+    height: 2rem;
+    background-color: #222;
+}
+
 </style>
 </head>
 <body>
-    <div id="mediaContainer">
-        <!-- media elements will be inserted here -->
-    </div>
     <div id="controls">
         Channel:
         <select id="channel">
@@ -70,6 +91,9 @@ img.mediaElement
         ms.
         <button id="btnFullScreen">Full-Screen</button>
         <span id="rate"></span>
+    </div>
+    <div id="mediaContainer">
+        <!-- media elements will be inserted here -->
     </div>
 </div>
 
@@ -209,12 +233,10 @@ function onLoadLayer(index, ls)
         {
             layerController = imageLayerController(ls);
         }
-        /*
         else if (ls.mimeType == "application/pdf")
         {
             layerController = pdfLayerController(ls);
         }
-        */
     }
     if (layerController == null)
     {
@@ -323,6 +345,15 @@ ws.onmessage = (event) => {
 
         case 'show':
             onShowLayer(msg.layerIndex, msg.display);
+            break;
+
+        case 'command':
+            // Dispatch to top-most layer controller that handles it
+            for (let i=g_layerControllers.length - 1; i>=0; i--)
+            {
+                if (g_layerControllers[i].onCommand && g_layerControllers[i].onCommand(msg))
+                    break;
+            }
             break;
     }
 };
@@ -501,20 +532,109 @@ function webrtcLayerController(layerState)
     }
 }
 
-/*
-function pdfLayerController(mediaFile)
+
+function pdfLayerController(layerState)
 {
-    let element = document.createElement("iframe");
+    let element = document.createElement("div");
     element.classList.add("mediaElement");
-//    element.setAttribute("type", "application/pdf");
-    element.setAttribute('src', channelState.mediaFile + "#toolbar=0&navpanes=0&scrollbar=0");
-    embed = element;
+    element.classList.add("pdfViewer");
+    populate();
+
+    const scrollBehaviour = "smooth";
+
+    function currentPage()
+    {
+        for (let i=element.children.length-1; i>=0; i--)
+        {
+            let el = element.children[i];
+            if (el.offsetTop <= element.scrollTop)
+                return i;
+        }
+        return 0;
+    }
+
+    function scrollToMarker(marker)
+    {
+        if (marker >= 0 && marker < element.children.length)
+        {
+            element.scrollTo({ left: element.scrollLeft, top: element.children[marker].offsetTop, behavior: scrollBehaviour});
+        }
+    }
+
+    function onCommand(msg)
+    {
+        switch (msg.command)
+        {
+            case 'jumpToMarker':
+                scrollToMarker(msg.param);
+                break;
+
+            case 'lineUp':
+                element.scrollBy({ left: 0, top: -element.clientHeight / 20, behavior: scrollBehaviour});
+                break;
+
+            case 'lineDown':
+                element.scrollBy({ left: 0, top: element.clientHeight / 20, behavior: scrollBehaviour});
+                break;
+
+            case 'halfPageUp':
+                element.scrollBy({ left: 0, top: -element.clientHeight / 2, behavior: scrollBehaviour});
+                break;
+
+            case 'halfPageDown':
+                element.scrollBy({ left: 0, top: element.clientHeight / 2, behavior: scrollBehaviour});
+                break;
+
+            case 'pageUp':
+                element.scrollBy({ left: 0, top: -element.clientHeight, behavior: scrollBehaviour});
+                break;
+
+            case 'pageDown':
+                element.scrollBy({ left: 0, top: element.clientHeight, behavior: scrollBehaviour});
+                break;
+
+            case 'home':
+                element.scrollTo({ left: element.scrollLeft, top: 0, behavior: scrollBehaviour});
+                break;
+
+            case 'end':
+                element.scrollTo({ left: element.scrollLeft, top: element.scrollHeight, behavior: scrollBehaviour});
+                break;
+
+            case 'nextMarker':
+                scrollToMarker(currentPage() + 1);
+                break;
+
+            case 'prevMarker':
+            {
+                let current = currentPage();
+                if (element.children[current].offsetTop < element.scrollTop)
+                    scrollToMarker(current);
+                else
+                    scrollToMarker(current - 1);
+                break;
+            }
+        }
+    }
+
     return {
         close: () => element.remove(),
+        onCommand,
         element, 
     }
+
+    async function populate()
+    {
+        const response = await fetch(layerState.mediaFile, { method: "HEAD" });
+        let pageCount = parseInt(response.headers.get("X-Cantabile-Media-Server-Page-Count"));
+        for (let i=0; i<pageCount; i++)
+        {
+            let el_img = document.createElement("img");
+            el_img.setAttribute("src", `${layerState.mediaFile}?page=${i+1}`);
+            element.appendChild(el_img);
+        }
+    }
 }
-    */
 
 
 

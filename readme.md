@@ -13,9 +13,10 @@ command line and editing text files.
 
 To install:
 
-1. Install [NodeJS](https://nodejs.org/en) (recommended v20.0).
+1. Install [NodeJS](https://nodejs.org/en) (recommended v20.0 or later).
 2. Install [Git](https://git-scm.com/downloads)
-3. From a command prompt install the cantabile-media-server package:
+3. Install [GhostScript](https://ghostscript.com/releases/gsdnld.html) (optional, but required for PDF support)
+4. From a command prompt install the cantabile-media-server package:
 
 ```
 npm install -g github:toptensoftware/cantabile-media-server
@@ -122,10 +123,47 @@ done with [ffmpeg](https://ffmpeg.org/):
 ffmpeg -i input.mpg output.mp4
 ```
 
+## PDF Support
+
+PDF files are supported if [Ghostscript](https://ghostscript.com/) is installed on the machine running the media server.
+
+Usually the server can locate the Ghostscript executable automatically:
+
+* On Windows, the C:\Program File\gs folder is searched for the most recent gswin64c.exe
+* On other platforms, `gs` is assumed to be available on the system path.
+
+The following settings in config.json can also be used to configure PDF rendering:
+
+```
+{
+    ...
+    gs_path: "C:\MyGhostScript\gs.exe",
+    gs_resolution: 240,
+    ...
+}
+```
+
+The default rendering resolution is 180, which provides a good balance between speed/quality for most screen displays but
+can be adjusted if required.
+
+PDF files are displayed in the same way as any other media file by referencing the PDF file in the programList.txt file:
+
+```
+1: song1.pdf
+2: song2.pdf
+3: song3.pdf
+```
+
+PDF files can be scrolled via MIDI (see MIDI Implementation below).
+
+Since PDF files are rendered on the server, if you reference a PDF file on a different machine the PDF file must
+also be served by Cantabile Media Server.  For example, if a PDF file is reference using a full path like `http://someotherserver.lan/media/mysong.pdf` then `someotherserver.lan` must also running Cantabile Media Server.
+
+
 
 ## Time Synchronisation
 
-`cantabile-media-server` supports three time synchronization modes:
+Cantabile Media Server supports three time synchronization modes:
 
 * `none` - each browser's video players maintains its own time which may drift or become very unsynchronized if started at different times
 * `master` - the media server itself becomes the master time sync. source.
@@ -223,7 +261,7 @@ Each layer supports the following settings:
 
 ## Program Slots
 
-Normally MIDI only supports a single program number selection per MIDI channel.  Since `cantabile-media-server` supports
+Normally MIDI only supports a single program number selection per MIDI channel.  Since Cantabile Media Server supports
 multiple display layers, sometimes you might want to select different media files on different layers.
 
 To support this, each MIDI channel has 4 "program number slots".
@@ -272,6 +310,8 @@ The server currently supports the following MIDI events:
 * MIDI Time Code (MTC) to control playback and sync. video's configured with sync. mode 'mtc'
 * CC 70 - 73 - program bank selection for alternate program slots 0 - 3
 * CC 80 - 89 - controls visibility of layers 0 - 9.
+* CC 90 - jump to marker (See MIDI Scroll Control below)
+* CC 93 - invoke scroll command (See MIDI Scroll Control below)
 
 The 16 MIDI channels are supported and each web browser can view a single "channel" (selectable by the drop down 
 on the web page).
@@ -282,6 +322,42 @@ in `programList.txt`.  Any currently connected displays will be updated to the n
 Send MMC Play, Pause and Stop events to control playback.  The device Id byte of the MMC message controls which
 MIDI channel to play/stop.   0 = all channels. 1 = MIDI Channel 1, 2 = MIDI Channel 2 etc...
 
+
+## MIDI Scroll Control
+
+When displaying documents (currently on PDF files are supported) the document can be scrolled via MIDI control.
+
+MIDI CC 90 jumps to a specified marker (for PDF files, each page is a marker so jumping to marker 0 jumps to the first page).
+
+eg: Sending CC90 = 2 will jump to the third page (markers are zero based)
+
+MIDI CC 93 accepts commands for various scroll operations and sending the following values will invoke the 
+following actions:
+
+* 1: line up
+* 2: line down
+* 3: half page up
+* 4: half page down
+* 5: page up
+* 6: page down
+* 7: home
+* 8: end
+* 9: previous marker
+* 10: next marker
+
+Note: 
+
+* commands 1-8 cause the document to scroll by a factor of the screen size.
+* commands 9-10 scroll to the next/previous marker (which for PDF documents is the next/previous PDF page).
+
+eg: Sending CC93 = 2 will scroll the document down by 1 line (1/20 of the screen height)
+
+eg: Sending CC93 = 6 will scroll the document down by the screen height
+
+eg: Sending CC93 = 10 will scroll to the next PDF page
+
+
+MIDI Scroll Control is directed to the top-most layer that supports it and will be ignored by other layers.
 
 
 ## Running Across Multiple Machines
@@ -300,7 +376,7 @@ The server can be configured to run across multiple machines:
 
 WebRTC feeds with a correct WHEP implementation are supported for real-time camera feeds.
 
-To indicate to cantabile-media-server that a URL represents a webrtc feed prefix the
+To indicate to Cantabile Media Server that a URL represents a webrtc feed prefix the
 full WHEP endpoint url with webrtc+(url).
 
 eg: suppose your realtime feed's WHEP end point is 
@@ -320,7 +396,7 @@ incomplete WHEP implementation.  Hopefully this will be rectified soon - [see he
 
 ## Command Line
 
-The `cantabile-media-server` commands supports the following command line arguments:
+Cantabile Media Server commands supports the following command line arguments:
 
 ```
 Usage: cantabile-media-server [options]
