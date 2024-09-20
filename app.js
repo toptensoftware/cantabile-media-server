@@ -323,6 +323,7 @@ for (let ch=0; ch<16; ch++)
                 layerState.mediaFile = qualifyMediaFile(layers[li].mediaFile);
                 layerState.syncMode = layers[li.syncMode] ?? layerState.syncMode;
                 layerState.useProgramList = layers[li].useProgramList === true;
+                layerState.programChannel = layers[li].programChannel;
                 layerState.programSlot = layers[li].programSlot ?? 0;
                 layerState.hiddenWhenStepped = layers[li].hiddenWhenStopped ?? false;
                 layerState.programNumberOffset = layers[li].programNumberOffset ?? 0;
@@ -688,39 +689,55 @@ function OnProgramChange(channelIndex, slot, programNumber, ignoreRedundant)
         return;
     }
 
-
     let channelState = channelStates[channelIndex];
     programNumber = (channelState.bank << 7) | programNumber;
     channelState.programNumberSlots[slot] = programNumber;
 
-    for (let layerIndex=0; layerIndex < channelState.layers.length; layerIndex++)
+    for (let ch = 0; ch < 16; ch++)
     {
-        let layerState = channelState.layers[layerIndex];
+        channelState = channelStates[ch];
 
-        // Only if layer uses program list and correct program slot
-        if (!layerState.useProgramList || layerState.programSlot != slot)
-            continue;
+        for (let layerIndex=0; layerIndex < channelState.layers.length; layerIndex++)
+        {
+            let layerState = channelState.layers[layerIndex];
 
-        // Work out  media file, quit if none
-        let mediaFile = qualifyMediaFile(programList.getMediaFile(programNumber + layerState.programNumberOffset));
+            // Check if correct channel
+            if (layerState.programChannel !== undefined)
+            {
+                if (layerState.programChannel != channelIndex + 1)
+                    continue;
+            }
+            else
+            {
+                if (ch != channelIndex)
+                    continue;
+            }
 
-        // Don't fire if redundant
-        if (ignoreRedundant && layerState.mediaFile == mediaFile)
-            continue;
-        
-        // Store media file in channel state
-        layerState.mediaFile = mediaFile;
-        
-        if (cl.verbose)
-            console.log(`loading media file ${mediaFile} on ch ${channelIndex} layer ${layerIndex}`);
-        
-        // Broadcast load
-        broadcast({
-            action: 'loadLayer',
-            channelIndex: channelIndex,
-            layerIndex: layerIndex,
-            layerState: layerState.render(),
-        });
+            // Only if layer uses program list and correct program slot
+            if (!layerState.useProgramList || layerState.programSlot != slot)
+                continue;
+
+            // Work out  media file, quit if none
+            let mediaFile = qualifyMediaFile(programList.getMediaFile(programNumber + layerState.programNumberOffset));
+
+            // Don't fire if redundant
+            if (ignoreRedundant && layerState.mediaFile == mediaFile)
+                continue;
+            
+            // Store media file in channel state
+            layerState.mediaFile = mediaFile;
+            
+            if (cl.verbose)
+                console.log(`loading media file ${mediaFile} on ch ${ch} layer ${layerIndex}`);
+            
+            // Broadcast load
+            broadcast({
+                action: 'loadLayer',
+                channelIndex: ch,
+                layerIndex: layerIndex,
+                layerState: layerState.render(),
+            });
+        }
     }
 }
 

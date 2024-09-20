@@ -272,6 +272,7 @@ Each layer supports the following settings:
 * `display` - either 'visible' (the default if not specified), 'hidden' or 'inactive'
 * `syncMode` - either 'none', 'master' or 'mtc' to set the sync mode for video's displayed in this layer.
 * `useProgramList` - whether to load media from the program list (using the channel's selected program number)
+* `programChannel` - specifies to use the selected program number from an alternate channel number
 * `programSlot` - which program number slot to use (see Program Slots below)
 * `programNumberOffset` - an offset to add to the channel's selected program number when loading media
 * `hiddenWhenStopped` - if true, automatically hides the layer when the video is stopped (shown when playing or paused)
@@ -300,6 +301,35 @@ send CC 70-73.
     In contrast, many MIDI programs display program numbers as one-based so  the first program number
     is 1 (event though it's transmitted as value 0).  This means in the sending program, you may need to use one-based for program changes, and zero based for CC 70-73.
 
+
+## Alternate Program Channels
+
+Normally a display layer for a channel uses the selected MIDI program from the same channel.  Sometimes however you might
+like to have separate display channels (ie: browser views) that all switch in response to a single program change.
+
+The `programChannel` setting in a layer tells that layer to use the selected program number of a different channel.
+
+In the following example, sending a MIDI program change on channel 1 will switch programs on both display channels 1 and 2.
+
+```
+    "channels": {
+        "1": {
+            "layers": [
+                { 
+                    "useProgramList": true,
+                },
+            ]
+        },
+        "2": {
+            "layers": [
+                { 
+                    "useProgramList": true,
+                    "programChannel: 1,                    <--- use the selected program of channel 1 instead of 2
+                },
+            ]
+        }
+    }
+```
 
 ## Controlling Layer Visibility
 
