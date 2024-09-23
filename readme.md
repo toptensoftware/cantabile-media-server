@@ -324,7 +324,7 @@ In the following example, sending a MIDI program change on channel 1 will switch
             "layers": [
                 { 
                     "useProgramList": true,
-                    "programChannel: 1,                    <--- use the selected program of channel 1 instead of 2
+                    "programChannel": 1,                    <--- use the selected program of channel 1 instead of 2
                 },
             ]
         }
