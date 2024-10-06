@@ -321,7 +321,7 @@ for (let ch=0; ch<16; ch++)
 
                 // Copy layer state from config
                 layerState.mediaFile = qualifyMediaFile(layers[li].mediaFile);
-                layerState.syncMode = layers[li.syncMode] ?? layerState.syncMode;
+                layerState.syncMode = layers[li].syncMode ?? layerState.syncMode;
                 layerState.useProgramList = layers[li].useProgramList === true;
                 layerState.programChannel = layers[li].programChannel;
                 layerState.programSlot = layers[li].programSlot ?? 0;
