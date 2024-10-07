@@ -225,6 +225,10 @@ function onLoadLayer(index, ls)
         {
             layerController = webrtcLayerController(ls);
         }
+        else if (ls.mediaFile?.startsWith("img+"))
+        {
+            layerController = imageLayerController(ls);
+        }
         else if (ls.mimeType.startsWith("video/"))
         {
             layerController = videoLayerController(ls);
@@ -369,9 +373,12 @@ function nullLayerController(layerIndex)
 
 function imageLayerController(layerState)
 {
+    let src = layerState.mediaFile;
+    if (src.startsWith("img+"))
+        src = src.substring(4);
     let element = document.createElement("img");
     element.classList.add("mediaElement");
-    element.setAttribute('src', layerState.mediaFile);
+    element.setAttribute('src', src);
     element.style.display = layerState.display == 'hidden' ? 'none' : "";
 
 

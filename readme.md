@@ -441,6 +441,39 @@ It currently does _not_ work with [go2rtc](https://github.com/AlexxIT/go2rtc) du
 incomplete WHEP implementation.  Hopefully this will be rectified soon - [see here](https://github.com/AlexxIT/go2rtc/issues/1315).
 
 
+## DroidCam Feeds
+
+DroidCam is a mobile phone app that lets you use mobile devices as a webcam for you PC.  It can also be used
+as a live camera feed with this media server.  With this approach the camera feed is sent directly from the
+device to the front end web browser - the media server isn't involved in transmitting the actual camera feed.
+
+Unfortunately this approach is currently limited to a single display screen due to limitations in DroidCam.
+
+To set this up, first make sure your mobile device is on the same local network as the media server's front-end 
+web browser clients, then obtain its IP address
+
+Then configure a URL for the camera feed as `img+http://IPADDRESSOFDEVICE/video?1920x1080` (adjust the resolution
+to suit).
+
+Make sure the droidcam app is running on the device before connecting the browser to the media server.  Also 
+because DroidCam only supports a single connected client, make sure no other browsers or the DroidCam PC client 
+isn't running and connected to the device.
+
+For example, to configure a layer that shows a DroidCam camera feed from a mobile device with IP address 10.1.1.114
+on channel 2:
+
+    "channels": {
+        "2": {
+            "layers": [
+                {
+                    "mediaFile": "img+http://10.1.1.114:4747/video?1920x1080"
+                },
+            ]
+        },
+    }
+
+
+
 
 ## Command Line
 
