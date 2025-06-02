@@ -20,6 +20,17 @@ body
     height: calc(100vh - 2rem);
 }
 
+body.no-controls #controls
+{
+    display:none;
+}
+
+body.no-controls #mediaContainer
+{
+    height: 100vh;
+}
+
+
 .mediaElement
 {
     position: absolute;
@@ -117,7 +128,8 @@ let g_elRate = document.getElementById("rate");
 
 // Full-screen button handler
 document.getElementById("btnFullScreen").onclick = (event) => {
-    document.getElementById("mediaContainer").requestFullscreen();
+    //document.getElementById("mediaContainer").requestFullscreen();
+    document.documentElement.requestFullscreen();
 }
 
 // URL Hash <-> Channel selector
@@ -161,6 +173,10 @@ function hashChanged()
     if (state.get("latcomp"))
     {
         g_latcomp.value = parseInt(state.get("latcomp"));
+    }
+    if (state.get("no-controls"))
+    {
+        document.body.classList.add("no-controls");
     }
     loadChannel();
 }
