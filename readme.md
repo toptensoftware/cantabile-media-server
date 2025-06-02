@@ -474,6 +474,19 @@ on channel 2:
 
 
 
+## Launching a Full-Screen Browser
+
+To launch a browser in full-screen mode you need to manually request that channel selector controls are hidden
+using the #no-controls=1 URL option.  You also need to use your browser's full screen command line option.
+
+For example, to launch Google Chrome full screen with a media player view also full screen use a command line
+like so:
+
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --start-fullscreen http://localhost:3000#no-controls=1
+
+* `--start-fullscreen` tells the browser to start in full-screen mode
+* `#no-controls=` tells the media player to hide the controls bar
+
 
 ## Command Line
 
