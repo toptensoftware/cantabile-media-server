@@ -5,6 +5,7 @@ Cantabile Media Server is MIDI controllable video playback, static image display
 It's designed as an accompanying program for [Cantabile Live Performer Music Software](https://www.cantabilesoftware.com)
 but should work with any MIDI Compatible software capable of sending MIDI events.
 
+For a detailed walkthrough showing how to set this up, see [Derek Cook's Guide](https://www.xfactory-librarians.co.uk/Downloads/UsingCantabileWithTheCantabileMediaServer.pdf).
 
 ## Features
 
