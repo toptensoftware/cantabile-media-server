@@ -40,7 +40,7 @@ if (cl.listMidiDevices)
     let midiPortCount = midiInput.getPortCount();
     for (let i=0; i<midiPortCount; i++)
     {
-        console.log(`${i}: ${midiInput.getPortName(i)}`);
+        console.log(`${i}: "${midiInput.getPortName(i)}"`);
     }
     process.exit(0);
 }
