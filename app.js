@@ -40,7 +40,7 @@ if (cl.listMidiDevices)
     let midiPortCount = midiInput.getPortCount();
     for (let i=0; i<midiPortCount; i++)
     {
-        console.log(`${i}: "${midiInput.getPortName(i)}"`);
+        console.log(`${i}: "${midiInput.getPortName(i).trim()}"`);
     }
     process.exit(0);
 }
@@ -749,7 +749,7 @@ if (typeof(config.midiPort) === 'string')
     let midiPortCount = midiInput.getPortCount();
     for (let i=0; i<midiPortCount; i++)
     {
-        if (midiInput.getPortName(i) === config.midiPort)
+        if (midiInput.getPortName(i).trim() === config.midiPort.trim())
         {
             midiInput.openPort(i);
             opened = true;
