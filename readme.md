@@ -192,9 +192,9 @@ In `none` and `master` modes, playback is controlled by sending MMC Sys-ex Messa
 
 In `mtc` modes, playback is started and stopped in response to MTC events received.
 
-In `master` and `mtc` modes, periodic timestamp pings are sent to each connected client and the playback rate of the 
+In `master` and `mtc` modes, periodic timestamp pings are sent to each connected client and the playback rate of the
 video players is constantly adjusted to keep the video as in-sync as possible.   If the discrepency between expected
-time and actual time exceeds one second, the video instantly jumps to the expected timestamp and sync. resumes from 
+time and actual time exceeds one second, the video instantly jumps to the expected timestamp and sync. resumes from
 that point onwards.
 
 The default synchronization mode can be set for all video players in the main config file section, eg:
@@ -210,6 +210,51 @@ The default synchronization mode can be set for all video players in the main co
     ```
 
 Each layer also has a customizable sync. mode - see Layers.
+
+
+## MTC Offset
+
+When using MTC sync mode, videos are assumed to start at MTC time zero. If your video content doesn't
+align with time zero in your MIDI transport, you can set a global MTC offset using a MIDI Pitch Bend message
+(on any channel).
+
+The offset shifts the relationship between MTC time and video position:
+
+* **Positive offset** — the video waits until the MTC transport reaches the offset time, then plays from the
+  beginning. Use this when your video content starts partway through the transport timeline.
+  For example, with an offset of +8 seconds, the video begins playing when MTC reaches 8s, and the video plays
+  from 0s onwards.
+
+* **Negative offset** — the video starts immediately from a position into the file equal to the absolute value
+  of the offset. Use this when your video content starts before the transport timeline.
+  For example, with an offset of -5 seconds, the video begins playing from 5s in as soon as the transport starts.
+
+* **Zero offset (center)** — no offset, normal MTC behaviour (pitch wheel at center position).
+
+The pitch wheel value maps as follows:
+
+* Center position (8192) = 0ms offset
+* Each unit above/below center = 10ms
+* Full range: approximately −81.9 seconds to +81.9 seconds
+
+The offset is **global** — it applies to all MTC-synced layers regardless of which MIDI channel the pitch bend
+was received on.
+
+The offset is **persistent** — it remains set across stop/start cycles until explicitly changed (send pitch bend
+center to clear it) or until a new media file is loaded, which resets the offset to zero.
+
+When an offset is active the server console shows both the raw MTC time and the resulting video position:
+
+```
+00:00:08:12.2 (media: 00:00:03:12.2)
+```
+
+When the offset would result in a negative video position (transport is before the offset threshold), the
+display shows a negative time as a reminder that video playback is pending:
+
+```
+00:00:03:00.0 (media: -00:00:05:00.0)
+```
 
 
 ## Latency Compenstation
@@ -357,6 +402,7 @@ The server currently supports the following MIDI events:
 * Program Change Events
 * MMC Sys-ex Message for Play, Pause and Stop
 * MIDI Time Code (MTC) to control playback and sync. video's configured with sync. mode 'mtc'
+* Pitch Bend - sets the global MTC offset (any channel, center = no offset, each unit = 10ms). See MTC Offset above.
 * CC 70 - 73 - program bank selection for alternate program slots 0 - 3
 * CC 80 - 89 - controls visibility of layers 0 - 9.
 * CC 90 - jump to marker (See MIDI Scroll Control below)

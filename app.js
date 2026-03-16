@@ -84,6 +84,8 @@ let mtcTime = 0;
 let mtcIsPlaying = false;
 let mtcPieceMask = 0;
 let mtcPieces = [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+let mtcOffset = 0;          // seconds: video time = mtcTime - mtcOffset (global, any pitch bend sets it)
+let mtcVideoActive = false; // true once onPlay has been sent for current MTC session
 
 // Load config
 let config = JSON5.parse(fs.readFileSync("config.json", "utf8"));
@@ -174,7 +176,7 @@ class LayerState
                     return this.#baseTime;
 
             case 'mtc':
-                return mtcTime;
+                return mtcTime - mtcOffset;
         }
 
         return null;
@@ -191,7 +193,7 @@ class LayerState
                 return this.#startPlayTime != null;
 
             case 'mtc':
-                return mtcIsPlaying;
+                return mtcIsPlaying && mtcTime >= mtcOffset;
         }
 
         return false;
@@ -444,8 +446,6 @@ midiInput.on('message', (deltaTime, m) => {
             {
                 case MidiMessage.MtcQuarterFrame:
                 {
-                    let mtcWasPlaying = mtcIsPlaying;
-
                     // If we're receiving MTC quarter frames then we're playing
                     mtcIsPlaying = true;
 
@@ -485,15 +485,18 @@ midiInput.on('message', (deltaTime, m) => {
                         // Reset mask of received pieces
                         mtcPieceMask = 0;
                     }
-                    
+
                     // Log time
                     mtcTime = qframesToSeconds(mtcFormat, mtcQFrameNumber);
                     logSmpteTime();
 
-                    // Start playback on all MTC channels
-                    if (!mtcWasPlaying)
+                    // Start playback on MTC channels once the offset threshold is reached.
+                    // For negative offsets the threshold is already passed so play fires immediately;
+                    // for positive offsets play fires once mtcTime reaches the offset.
+                    if (!mtcVideoActive && mtcTime >= mtcOffset)
                     {
-                        forAllMtcLayers(x => x.onPlay());
+                        mtcVideoActive = true;
+                        forAllMtcLayers(l => l.onPlay());
                     }
                     break;
                 }
@@ -561,6 +564,7 @@ midiInput.on('message', (deltaTime, m) => {
                         logSmpteTime();
                         
                         // Pause all MTC channels
+                        mtcVideoActive = false;
                         forAllMtcLayers(x => x.onPause());
                     }
                     break;
@@ -671,6 +675,24 @@ midiInput.on('message', (deltaTime, m) => {
                 OnProgramChange(channelIndex, 0, m[1]);
                 break;
             }
+
+            case MidiMessage.PitchBend:
+            {
+                // Set global MTC offset (pitch bend on any channel).
+                // Pitch wheel center (8192) = 0 offset; each unit = 10ms.
+                // Range: -81920ms (~-81.9s) to +81910ms (~+81.9s).
+                // Positive offset: video waits until MTC time reaches the offset, then plays from 0.
+                // Negative offset: video starts immediately from abs(offset) into the file.
+                let rawValue = ((m[2] & 0x7f) << 7) | (m[1] & 0x7f);
+                mtcOffset = (rawValue - 8192) / 100;
+                mtcVideoActive = false;
+                logSmpteTime();
+                if (!mtcIsPlaying)
+                    forAllMtcLayers(l => l.onPause());
+                if (cl.verbose)
+                    console.log(`MTC offset: ${(rawValue - 8192) * 10}ms`);
+                break;
+            }
        }
     }
     catch (err)
@@ -726,6 +748,11 @@ function OnProgramChange(channelIndex, slot, programNumber, ignoreRedundant)
             
             // Store media file in channel state
             layerState.mediaFile = mediaFile;
+
+            // Reset MTC offset when media changes (offset is per-media-file)
+            mtcOffset = 0;
+            mtcVideoActive = false;
+            logSmpteTime();
             
             if (cl.verbose)
                 console.log(`loading media file ${mediaFile} on ch ${ch} layer ${layerIndex}`);
@@ -924,6 +951,22 @@ function qualifyMediaFile(mediaFile)
 
 function logSmpteTime()
 {
-    process.stdout.write(formatSmpte(qframesToSmpte(mtcFormat, mtcQFrameNumber)) + '\r');
+    if (mtcOffset === 0)
+    {
+        process.stdout.write(formatSmpte(qframesToSmpte(mtcFormat, mtcQFrameNumber)) + '                                       \r');
+    }
+    else
+    {
+        const fps = [24, 25, 30, 30][mtcFormat];
+        let offsetQFrames = Math.round(mtcOffset * fps * 4);
+        let adjustedQFrames = mtcQFrameNumber - offsetQFrames;
+        let adjustedStr = adjustedQFrames >= 0
+            ? formatSmpte(qframesToSmpte(mtcFormat, adjustedQFrames))
+            : `-${formatSmpte(qframesToSmpte(mtcFormat, -adjustedQFrames))}`;
+        process.stdout.write(
+            formatSmpte(qframesToSmpte(mtcFormat, mtcQFrameNumber)) +
+            ` (media: ${adjustedStr})                ` + '\r'
+        );
+    }
 }
 
