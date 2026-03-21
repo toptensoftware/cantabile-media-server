@@ -211,6 +211,10 @@ class LayerState
             this.#startPlayTime = Date.now();
             this.onPlay()
         }   
+        if (this.syncMode == 'none')
+        {
+            this.onPlay();
+        }
     }
     
     onPlay()
@@ -237,6 +241,11 @@ class LayerState
             this.onPause();
         }
 
+        if (this.syncMode == "none")
+        {
+            this.onPause();
+        }
+
     }
 
     onPause()
@@ -258,6 +267,11 @@ class LayerState
         {
             this.#startPlayTime = null;
             this.#baseTime = 0;
+            this.onStop();
+        }
+
+        if (this.syncMode == "none")
+        {
             this.onStop();
         }
     }

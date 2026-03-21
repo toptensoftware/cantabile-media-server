@@ -436,7 +436,8 @@ function videoLayerController(layerState)
         playStartBaseTime = null;
         playStartVideoTime = null;
         element.pause(); 
-        element.currentTime = timestamp;
+        if (timestamp !== null)
+            element.currentTime = timestamp;
         g_elRate.innerText = "";
         show();
     }
