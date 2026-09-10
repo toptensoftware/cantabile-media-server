@@ -93,7 +93,7 @@ function pageCount(file)
                 return reject(new Error(`gs returned error: ${code}`));
 
             // Parse output, looking for "File has NN pages"
-            for (let line of stderr.split('\n'))
+            for (let line of stdout.split('\n'))
             {
                 let match = line.match(/File has (\d+) page/);
                 if (match)
